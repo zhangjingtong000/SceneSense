@@ -1,0 +1,723 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SceneSense - 多Agent场景理解</title>
+<style>
+:root{--bg:#101216;--surface:#1b1e25;--panel:#20242c;--panel2:#171a20;--border:#303640;--text:#e8ebf0;--muted:#9aa3af;--soft:#c8d0db;--accent:#f0a040;--blue:#5b9bd5;--green:#4caf91;--red:#e05a68;--cyan:#5ac6c8;--violet:#a27bd8;--radius:8px;--transition:180ms ease}
+*{margin:0;padding:0;box-sizing:border-box}
+body{font:13px/1.5 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",sans-serif;background:var(--bg);color:var(--text);height:100vh;display:flex;flex-direction:column;overflow:hidden}
+button,input{font:inherit}
+header{display:flex;align-items:center;padding:0 18px;height:52px;background:var(--surface);border-bottom:1px solid var(--border);gap:14px;flex:0 0 52px}
+header .logo{font-size:16px;font-weight:800;color:var(--accent);letter-spacing:0}
+header .logo span{color:var(--text);font-weight:500}
+#fileInput{display:none}
+.upload-btn{padding:7px 16px;background:var(--accent);color:#0a0a0a;border:none;border-radius:var(--radius);font-weight:700;cursor:pointer;font-size:12px;transition:filter var(--transition)}
+.upload-btn:hover{filter:brightness(1.12)}
+.status-dot{width:8px;height:8px;border-radius:50%;background:var(--muted);flex-shrink:0;transition:background .4s}
+.status-dot.loading{background:var(--blue);animation:pulse .8s infinite}
+.status-dot.ready{background:var(--green)}
+.status-dot.error{background:var(--red)}
+@keyframes pulse{0%,100%{box-shadow:0 0 0 0 rgba(91,155,213,.35)}50%{box-shadow:0 0 0 8px rgba(91,155,213,0)}}
+.status-text{font-size:12px;color:var(--muted);margin-left:auto;white-space:nowrap}
+.main{display:flex;flex:1;min-height:0;overflow:hidden}
+.video-col{flex:1;display:flex;flex-direction:column;min-width:0;background:#050607;position:relative}
+.viewer{flex:1;position:relative;min-height:0}
+.video-col canvas,.video-col video{width:100%;height:100%;object-fit:contain}
+.overlay{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:#07080a}
+.empty-state{text-align:center;color:var(--muted);padding:20px}
+.empty-state .mark{font-size:32px;font-weight:800;color:var(--accent);margin-bottom:10px}
+.progress-wrap{position:absolute;bottom:58px;left:50%;transform:translateX(-50%);width:min(320px,70vw);text-align:center}
+.progress-wrap .pct{font-size:13px;color:var(--text);margin-bottom:5px}
+.progress-wrap .bar{height:4px;background:var(--border);border-radius:2px;overflow:hidden}
+.progress-wrap .bar .fill{height:100%;background:var(--accent);width:0;transition:width .4s ease}
+.player-controls{position:absolute;bottom:8px;left:50%;transform:translateX(-50%);display:none;gap:8px;align-items:center;z-index:5;background:rgba(16,18,22,.7);border:1px solid var(--border);border-radius:var(--radius);padding:7px;backdrop-filter:blur(8px)}
+.player-controls button{background:var(--panel);color:var(--text);border:1px solid var(--border);padding:6px 12px;border-radius:6px;cursor:pointer;font-size:12px}
+.player-controls button.primary{background:var(--accent);color:#0a0a0a;border-color:transparent;font-weight:700}
+.player-controls input{width:min(220px,30vw);accent-color:var(--accent)}
+.timeline-wrap{flex:0 0 clamp(165px,24vh,260px);background:var(--surface);border-top:1px solid var(--border);display:flex;flex-direction:column;min-height:0}
+.timeline-title{display:flex;align-items:center;justify-content:space-between;padding:7px 12px 3px;color:var(--muted);font-size:11px}
+.timeline-title b{color:var(--soft);font-size:12px}
+.event-heat{height:38px;margin:0 12px 6px;position:relative;border:1px solid var(--border);border-radius:6px;background:var(--panel2);overflow:hidden}
+.event-heat .seg{position:absolute;top:6px;bottom:6px;border-radius:4px;cursor:pointer;min-width:3px;transition:filter var(--transition),transform var(--transition)}
+.event-heat .seg:hover{filter:brightness(1.25);transform:translateY(-1px);z-index:3}
+.event-heat .seg .tooltip{display:none;position:absolute;bottom:30px;left:50%;transform:translateX(-50%);width:max-content;max-width:320px;background:var(--panel);border:1px solid var(--border);padding:8px 10px;border-radius:6px;font-size:11px;color:var(--text);box-shadow:0 6px 20px rgba(0,0,0,.45);z-index:10;white-space:normal}
+.event-heat .seg:hover .tooltip{display:block}
+.time-marker{position:absolute;top:0;bottom:0;width:2px;background:#fff;box-shadow:0 0 8px rgba(255,255,255,.5);opacity:.85;pointer-events:none}
+.lifeline-pane{flex:1;overflow:auto;padding:0 12px 10px;min-height:0}
+.life-row{display:grid;grid-template-columns:minmax(76px,98px) minmax(180px,1fr);gap:8px;align-items:center;height:28px;border-bottom:1px solid rgba(255,255,255,.04)}
+.life-label{font-size:11px;color:var(--soft);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:pointer}
+.life-label.active{color:var(--accent);font-weight:700}
+.life-track{height:14px;position:relative;background:rgba(255,255,255,.04);border-radius:4px;overflow:hidden}
+.life-seg{position:absolute;top:2px;bottom:2px;border-radius:3px;min-width:3px}
+.life-gap{position:absolute;top:3px;bottom:3px;border-top:1px dashed var(--accent);border-bottom:1px dashed var(--accent);opacity:.9}
+.panel-empty{color:var(--muted);font-size:12px;padding:10px 0}
+.right-panel{width:420px;background:var(--surface);border-left:1px solid var(--border);display:flex;flex-direction:column;flex-shrink:0;overflow:hidden;min-width:300px;max-width:min(560px,48vw)}
+.entity-panel{flex:0 0 42%;min-height:150px;padding:12px 14px;border-bottom:1px solid var(--border);overflow:hidden;display:flex;flex-direction:column}
+.panel-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;gap:10px}
+.panel-head h3{font-size:12px;color:var(--soft);font-weight:800}
+.panel-head span{font-size:11px;color:var(--muted)}
+.agent-panel{flex:0 0 auto;padding:8px 10px;margin-bottom:8px;border:1px solid var(--border);border-radius:var(--radius);background:var(--panel2)}
+.agent-row{display:flex;align-items:center;gap:8px;padding:3px 0;font-size:12px}
+.agent-row .dot{width:7px;height:7px;border-radius:50%;flex-shrink:0;background:var(--border);transition:background .3s}
+.agent-row .dot.active{background:var(--blue);box-shadow:0 0 8px rgba(91,155,213,.55)}
+.agent-row .dot.done{background:var(--green)}
+.agent-row .label{flex:1;color:var(--soft)}
+.agent-row .stat{color:var(--muted);font-size:11px;white-space:nowrap}
+.entity-list{flex:1;overflow:auto;min-height:0}
+.entity-item{border:1px solid var(--border);border-radius:var(--radius);padding:9px 10px;margin-bottom:8px;background:var(--panel2);cursor:pointer;transition:border var(--transition),background var(--transition)}
+.entity-item:hover{border-color:#49515e}
+.entity-item.active{border-color:var(--accent);background:rgba(240,160,64,.08)}
+.entity-main{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:5px}
+.entity-name{font-weight:800}
+.quality{font-size:10px;color:var(--muted);background:rgba(255,255,255,.06);border-radius:4px;padding:1px 6px;white-space:nowrap}
+.entity-meta{display:grid;grid-template-columns:1fr 1fr;gap:3px 8px;color:var(--muted);font-size:11px}
+.evidence-panel{flex:0 0 26%;min-height:135px;padding:12px 14px;border-bottom:1px solid var(--border);overflow:auto;background:var(--panel2)}
+.filter-row{display:flex;gap:6px;flex-wrap:wrap;margin:2px 0 9px}
+.filter-row button{padding:4px 8px;border:1px solid var(--border);background:var(--panel);color:var(--muted);border-radius:6px;cursor:pointer;font-size:11px}
+.filter-row button.active{color:#0a0a0a;background:var(--accent);border-color:var(--accent);font-weight:700}
+.muted{color:var(--muted)}
+.node-card{border:1px solid var(--border);border-radius:var(--radius);padding:8px;margin-bottom:8px;background:rgba(255,255,255,.03)}
+.node-card b{color:var(--soft)}
+.kg-edge{font-size:12px;line-height:1.55;border-left:3px solid var(--blue);padding:6px 8px;margin:6px 0;background:rgba(255,255,255,.04);border-radius:0 6px 6px 0}
+.kg-edge.interacts_with{border-left-color:var(--green)}
+.kg-edge.belongs_to{border-left-color:var(--accent)}
+.kg-edge.next{border-left-color:var(--cyan)}
+.kg-edge .muted{color:var(--muted);font-size:11px}
+.chat-panel{flex:1 1 auto;display:flex;flex-direction:column;min-height:135px;overflow:hidden}
+.chat-msgs{flex:1;overflow-y:auto;padding:12px 14px}
+.chat-msg{margin-bottom:10px;font-size:12px}
+.chat-msg.user .bubble{background:rgba(240,160,64,.12);border:1px solid rgba(240,160,64,.22);margin-left:auto;max-width:86%}
+.chat-msg.agent .bubble{background:rgba(145,155,175,.08);border:1px solid var(--border);margin-right:auto;max-width:92%}
+.chat-msg .bubble{padding:10px 12px;border-radius:var(--radius);line-height:1.65;word-break:break-word}
+.trail-toggle{font-size:11px;color:var(--accent);cursor:pointer;margin-top:6px;display:inline-block;user-select:none}
+.trail-box{display:none;margin-top:6px;font-size:11px;border-left:2px solid var(--border);padding-left:10px}
+.trail-box.open{display:block}
+.trail-step{padding:4px 0;color:var(--muted)}
+.trail-step .t-agent{color:var(--text);font-weight:700}
+.chat-input-w{flex:0 0 auto;padding:10px;border-top:1px solid var(--border);display:flex;gap:8px}
+.chat-input-w input{flex:1;padding:9px 12px;background:var(--bg);border:1px solid var(--border);color:var(--text);border-radius:var(--radius);outline:none;font-size:12px;min-width:0}
+.chat-input-w input:focus{border-color:var(--accent)}
+.chat-input-w button{padding:9px 14px;background:var(--accent);color:#0a0a0a;border:none;border-radius:var(--radius);font-weight:700;cursor:pointer;font-size:12px}
+.person-card{display:none;position:absolute;top:10px;right:10px;background:rgba(27,30,37,.96);border:1px solid var(--border);border-radius:var(--radius);padding:14px;max-width:min(320px,80vw);font-size:12px;z-index:10;box-shadow:0 4px 20px rgba(0,0,0,.5);backdrop-filter:blur(8px)}
+.person-card .close{position:absolute;top:6px;right:10px;cursor:pointer;color:var(--muted);font-size:14px}
+.person-card .close:hover{color:var(--text)}
+.person-card .ent-id{font-weight:800;color:var(--accent)}
+.person-card .motion{color:var(--muted);margin-top:4px}
+.resize-h{width:4px;cursor:col-resize;background:var(--border);flex-shrink:0;transition:background .2s}
+.resize-v{height:4px;cursor:row-resize;background:var(--border);flex-shrink:0;transition:background .2s}
+.resize-h:hover,.resize-h.active,.resize-v:hover,.resize-v.active{background:var(--accent)}
+@media(max-width:980px){
+  body{overflow:auto;height:auto;min-height:100vh}
+  .main{flex-direction:column;overflow:visible}
+  .video-col{min-height:62vh}
+  .timeline-wrap{flex:0 0 220px}
+  .resize-h{display:none}
+  .right-panel{width:100%;max-width:none;min-width:0;border-left:none;border-top:1px solid var(--border);height:58vh}
+}
+@media(max-width:620px){
+  header{padding:0 10px;gap:9px}
+  .status-text{max-width:42vw;overflow:hidden;text-overflow:ellipsis}
+  .life-row{grid-template-columns:72px minmax(150px,1fr)}
+  .entity-panel{flex-basis:45%}
+  .evidence-panel{flex-basis:28%}
+  .player-controls{width:calc(100% - 20px);justify-content:center}
+}
+</style>
+</head>
+<body>
+<header>
+  <div class="logo">Scene<span>Sense</span></div>
+  <input type="file" id="fileInput" accept="video/*,.mp4,.avi,.mkv">
+  <button class="upload-btn" id="uploadBtn">上传视频</button>
+  <div class="status-dot" id="statusDot"></div>
+  <span class="status-text" id="statusText">就绪</span>
+</header>
+
+<div class="main">
+  <div class="video-col" id="videoCol">
+    <div class="viewer">
+      <div class="overlay" id="overlay">
+        <div class="empty-state"><div class="mark">SS</div><div>上传视频后开始连续实体分析</div></div>
+      </div>
+      <canvas id="canvas" style="display:none;position:absolute;inset:0;width:100%;height:100%;object-fit:contain"></canvas>
+      <video id="videoPlayer" style="position:absolute;inset:0;width:100%;height:100%;object-fit:contain;display:none" controls></video>
+      <div class="player-controls" id="playerControls">
+        <button class="primary" onclick="playFrom(playingFrame)">播放</button>
+        <button onclick="stopPlay()">暂停</button>
+        <input type="range" id="scrubBar" min="0" value="0" oninput="showFrame(parseInt(this.value))">
+      </div>
+      <div class="progress-wrap" id="progressWrap" style="display:none">
+        <div class="pct" id="pctText">0%</div>
+        <div class="bar"><div class="fill" id="pctFill"></div></div>
+      </div>
+      <div class="person-card" id="personCard">
+        <span class="close" onclick="hidePersonCard()">x</span>
+        <div id="personContent"></div>
+      </div>
+    </div>
+    <div class="timeline-wrap">
+      <div class="timeline-title"><b>事件热力</b><span>点击热区定位片段</span></div>
+      <div class="event-heat" id="timelineBar"><div class="panel-empty" style="padding:9px 10px">等待事件生成</div></div>
+      <div class="timeline-title"><b>实体生命线</b><span id="frameScaleLabel">统一帧号基准</span></div>
+      <div class="lifeline-pane" id="lifelinePane"><div class="panel-empty">等待稳定实体 ID</div></div>
+    </div>
+  </div>
+
+  <div class="resize-h" id="resizeMain"></div>
+  <div class="right-panel" id="rightPanel">
+    <div class="entity-panel" id="entityPanel">
+      <div class="panel-head"><h3>实体档案</h3><span id="entityCountText">0 个实体</span></div>
+      <div class="agent-panel" id="agentPanel"></div>
+      <div class="entity-list" id="entityList"><div class="panel-empty">上传视频后显示 Person 生命线</div></div>
+    </div>
+    <div class="resize-v" id="resizeAgent"></div>
+    <div class="evidence-panel" id="evidencePanel">
+      <div class="panel-head"><h3>KG 证据子图</h3><span id="kgCountText">0 节点 / 0 边</span></div>
+      <div class="filter-row" id="kgFilters">
+        <button data-filter="all" class="active" onclick="setKGFilter('all')">全部</button>
+        <button data-filter="interacts_with" onclick="setKGFilter('interacts_with')">交互</button>
+        <button data-filter="belongs_to" onclick="setKGFilter('belongs_to')">归属</button>
+        <button data-filter="next" onclick="setKGFilter('next')">时序</button>
+      </div>
+      <div id="kgEvidence"><div class="panel-empty">选择一个实体查看 1-2 跳证据链</div></div>
+    </div>
+    <div class="chat-panel" id="chatPanel">
+      <div class="chat-msgs" id="chatMsgs">
+        <div class="chat-msg agent"><div class="bubble">上传视频后，系统会以稳定的 Person ID 连接时间轴、KG 和 Agent 分析。</div></div>
+      </div>
+      <div class="chat-input-w">
+        <input type="text" id="chatInput" placeholder="问问场景里发生了什么..." onkeypress="if(event.keyCode===13)sendChat()">
+        <button onclick="sendChat()">发送</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+// State
+let videoId=null,ws=null,fps=25,totalFrames=0,frameIdx=0,events=[],framePrefix='';
+let entities=[],lifelines=[],kgGraph={nodes:[],edges:[]},kgFilter='all';
+let canvas=document.getElementById('canvas'),ctx=canvas.getContext('2d');
+let personMap={},selectedPerson=null,selectedEntity=null,frameBboxes={};
+let playingFrame=0,playTimer=null,canvasSized=false;
+const ENTITY_COLORS=['#5b9bd5','#4caf91','#f0a040','#e05a68','#a27bd8','#5ac6c8','#d97842','#8bbf5c','#c96b9e','#6ba8d9'];
+resetAgentView();
+
+// Upload
+document.getElementById('uploadBtn').onclick=()=>document.getElementById('fileInput').click();
+document.getElementById('fileInput').onchange=async()=>{
+  const f=document.getElementById('fileInput').files[0]; if(!f)return;
+  setStatus('loading','上传中...');
+  const fd=new FormData();fd.append('file',f);
+  const r=await fetch('/upload',{method:'POST',body:fd});
+  const d=await r.json();
+  videoId=d.video_id;
+  setStatus('loading','分析中...');
+  document.getElementById('overlay').style.display='none';
+  canvas.style.display='';
+  canvasSized=false;
+  document.getElementById('progressWrap').style.display='';
+  events=[];entities=[];lifelines=[];kgGraph={nodes:[],edges:[]};personMap={};frameBboxes={};
+  selectedPerson=null;selectedEntity=null;framePrefix='';playingFrame=0;
+  renderTimeline();renderLifelines();renderEntities();renderEvidence();
+  document.getElementById('chatMsgs').innerHTML='';
+  resetAgentView();resetAgentDots();
+  connectWS();
+};
+
+// WebSocket
+function connectWS(){
+  if(ws)ws.close();
+  const proto=location.protocol==='https:'?'wss:':'ws:';
+  ws=new WebSocket(`${proto}//${location.host}/ws/${videoId}`);
+  ws.onmessage=async e=>{
+    const msg=JSON.parse(e.data);
+    switch(msg.type){
+      case 'meta':
+        fps=Number(msg.fps)||fps;
+        totalFrames=Number(msg.total_frames||msg.totalFrames)||totalFrames;
+        updateFrameScale();
+        break;
+      case 'frame':
+        handleFrameMessage(msg);
+        break;
+      case 'progress':
+        document.getElementById('pctText').textContent=msg.pct+'%';
+        document.getElementById('pctFill').style.width=msg.pct+'%';
+        setStatus('loading',`分析中... ${msg.pct}%`);
+        break;
+      case 'agent_status':
+        updateAgentStatus(msg.agent,msg.status,msg.message);
+        break;
+      case 'event':
+        events.push(msg);
+        mergeDisplayPayload(msg);
+        renderTimeline();renderLifelines();renderEntities();renderEvidence();
+        addChatMsg('agent',formatEventMsg(msg));
+        break;
+      case 'done':
+        setStatus('ready','分析完成');
+        document.getElementById('progressWrap').style.display='none';
+        framePrefix=msg.frame_dir||framePrefix;
+        totalFrames=Number(msg.total_frames)||totalFrames;
+        fps=Number(msg.fps)||fps;
+        if(msg.events&&msg.events.length)mergeDisplayPayload(msg.events[msg.events.length-1]);
+        canvas.style.display='';
+        document.getElementById('videoPlayer').style.display='none';
+        document.getElementById('playerControls').style.display='flex';
+        document.getElementById('scrubBar').max=Math.max(0,totalFrames-1);
+        showFrame(0);
+        renderTimeline();renderLifelines();renderEntities();renderEvidence();updateFrameScale();
+        addChatMsg('agent','分析完成。点击事件热力定位片段，点击 Person 行查看完整生命线和 KG 证据。');
+        break;
+      case 'error':
+        setStatus('error',msg.message);
+        addChatMsg('agent','错误：'+escapeHtml(msg.message||'未知错误'));
+        break;
+    }
+  };
+  ws.onerror=()=>setStatus('error','连接错误');
+}
+function handleFrameMessage(msg){
+  frameIdx=Number(msg.frame_idx)||0;
+  if(msg.entities){entities=msg.entities;renderEntities();}
+  const now=Date.now();
+  (msg.persons||[]).forEach(p=>{
+    p._ts=now;
+    p.entity_id=p.entity_id||`Track-${p.track_id}`;
+    personMap[p.track_id]=p;
+  });
+  for(const [tid,p] of Object.entries(personMap)){if(now-p._ts>5000)delete personMap[tid];}
+  const snap={};
+  (msg.persons||[]).forEach(p=>{
+    if(!p.bbox)return;
+    snap[p.track_id]=p.bbox;
+    if(p.entity_id)snap[p.entity_id]=p.bbox;
+  });
+  frameBboxes[frameIdx]=snap;
+  trimFrameSnapshots();
+  const imgR=new Image();
+  imgR.onload=()=>{
+    if(!canvasSized){canvas.width=imgR.naturalWidth;canvas.height=imgR.naturalHeight;canvasSized=true;}
+    ctx.drawImage(imgR,0,0);
+    drawSelectedHighlight(snap);
+  };
+  imgR.src='data:image/jpeg;base64,'+msg.image;
+}
+function mergeDisplayPayload(payload){
+  if(payload.entities)entities=payload.entities;
+  if(payload.lifelines)lifelines=payload.lifelines;
+  if(payload.kg_subgraph)kgGraph=payload.kg_subgraph;
+}
+function trimFrameSnapshots(){
+  const fids=Object.keys(frameBboxes);
+  if(fids.length<=3000)return;
+  const sorted=fids.map(Number).sort((a,b)=>a-b);
+  for(let i=0;i<sorted.length-3000;i++)delete frameBboxes[sorted[i]];
+}
+
+// Agent status
+function resetAgentDots(){
+  ['Traj','Inter','Summ'].forEach(a=>{
+    const dot=document.getElementById('dot'+a),stat=document.getElementById('stat'+a);
+    if(dot)dot.className='dot';
+    if(stat)stat.textContent='等待中';
+  });
+}
+function updateAgentStatus(agent,status,message){
+  const map={trajectory_agent:'Traj',interaction_agent:'Inter',summary_agent:'Summ'};
+  if(agent==='system'){
+    setStatus(status==='loading'?'loading':'ready',message||'就绪');
+    return;
+  }
+  const k=map[agent]; if(!k)return;
+  const dot=document.getElementById('dot'+k),stat=document.getElementById('stat'+k);
+  if(!dot||!stat)return;
+  dot.className='dot '+(status==='active'?'active':'done');
+  stat.textContent=status==='active'?'分析中':'完成';
+}
+function resetAgentView(){
+  const ap=document.getElementById('agentPanel');
+  ap.innerHTML=`<div class="agent-row"><div class="dot" id="dotTraj"></div><span class="label">轨迹分析</span><span class="stat" id="statTraj">等待中</span></div>
+    <div class="agent-row"><div class="dot" id="dotInter"></div><span class="label">交互分析</span><span class="stat" id="statInter">等待中</span></div>
+    <div class="agent-row"><div class="dot" id="dotSumm"></div><span class="label">场景总结</span><span class="stat" id="statSumm">等待中</span></div>`;
+}
+
+// Timeline and lifelines
+function renderTimeline(){
+  const bar=document.getElementById('timelineBar');
+  bar.innerHTML='';
+  if(!events.length){
+    bar.innerHTML='<div class="panel-empty" style="padding:9px 10px">等待事件生成</div>';
+    return;
+  }
+  const total=getTimelineTotal();
+  events.forEach(ev=>{
+    const start=Number(ev.frame_start)||Math.round((ev.duration?.[0]||0)*fps);
+    const end=Number(ev.frame_end)||Math.max(start+1,Math.round((ev.duration?.[1]||0)*fps));
+    const left=Math.max(0,Math.min(100,start/total*100));
+    const width=Math.max(0.5,(end-start+1)/total*100);
+    const seg=document.createElement('div');
+    seg.className='seg';
+    seg.style.left=left+'%';
+    seg.style.width=Math.min(100-left,width)+'%';
+    const intensity=Math.min(1,Number(ev.entity_count||0)/25+Number((ev.interactions||[]).length||0)/18);
+    const r=Math.round(80+intensity*160),g=Math.round(135+intensity*65),b=Math.round(170-intensity*100);
+    seg.style.background=`rgb(${r},${g},${b})`;
+    seg.innerHTML=`<span class="tooltip">${formatEventTooltip(ev)}</span>`;
+    seg.onclick=()=>selectEvent(ev);
+    bar.appendChild(seg);
+  });
+  if(playingFrame>=0){
+    const marker=document.createElement('div');
+    marker.className='time-marker';
+    marker.style.left=Math.max(0,Math.min(100,playingFrame/getTimelineTotal()*100))+'%';
+    bar.appendChild(marker);
+  }
+}
+function renderLifelines(){
+  const pane=document.getElementById('lifelinePane');
+  pane.innerHTML='';
+  if(!lifelines.length){
+    pane.innerHTML='<div class="panel-empty">等待稳定实体 ID</div>';
+    return;
+  }
+  const total=getTimelineTotal();
+  lifelines.slice().sort((a,b)=>entityIndex(a.entity_id)-entityIndex(b.entity_id)).forEach(line=>{
+    const row=document.createElement('div');
+    row.className='life-row';
+    const label=document.createElement('div');
+    label.className='life-label'+(line.entity_id===selectedEntity?' active':'');
+    label.textContent=line.entity_id;
+    label.title='点击查看实体证据';
+    label.onclick=()=>selectEntity(line.entity_id);
+    const track=document.createElement('div');
+    track.className='life-track';
+    (line.segments||[]).forEach(seg=>{
+      const part=document.createElement('div');
+      part.className='life-seg';
+      part.style.left=(Number(seg.frame_start||0)/total*100)+'%';
+      part.style.width=Math.max(0.5,((Number(seg.frame_end||0)-Number(seg.frame_start||0)+1)/total*100))+'%';
+      part.style.background=entityColor(line.entity_id);
+      part.title=`track #${seg.track_id}  帧 ${seg.frame_start}-${seg.frame_end}  ${qualityLabel(seg.quality)}`;
+      track.appendChild(part);
+    });
+    (line.occlusion_gaps||[]).forEach(gap=>{
+      const g=document.createElement('div');
+      g.className='life-gap';
+      const from=Number(gap.from_frame||0),to=Number(gap.to_frame||from);
+      g.style.left=(from/total*100)+'%';
+      g.style.width=Math.max(0.4,((to-from+1)/total*100))+'%';
+      g.title=`遮挡/断轨缺口：帧 ${from}-${to}`;
+      track.appendChild(g);
+    });
+    row.appendChild(label);row.appendChild(track);pane.appendChild(row);
+  });
+}
+function selectEvent(ev){
+  showEventDetail(ev);
+  const fn=Number(ev.frame_start)||Math.round((ev.duration?.[0]||0)*fps)||0;
+  if(framePrefix)showFrame(fn);
+}
+function showEventDetail(ev){
+  const box=document.getElementById('kgEvidence');
+  const interactions=ev.interactions||[];
+  let h=`<div class="node-card"><b>事件 ${escapeHtml(ev.event_id||'')}</b><br>
+    <span class="muted">帧 ${ev.frame_start}-${ev.frame_end}，${ev.entity_count||0} 个目标</span><br>
+    ${escapeHtml(ev.summary||'暂无摘要')}</div>`;
+  if(interactions.length){
+    h+='<div class="muted">本事件交互</div>';
+    interactions.forEach(item=>{
+      h+=`<div class="kg-edge interacts_with">${escapeHtml((item.entities||[]).join(' ↔ '))}<br><span class="muted">${escapeHtml(item.desc||'')}</span></div>`;
+    });
+  }
+  if(ev.trail&&ev.trail.length){
+    h+='<div class="muted">Agent 推理链</div>';
+    ev.trail.forEach(t=>{
+      h+=`<div class="kg-edge"><b>${escapeHtml(t.agent||'Agent')}</b><br><span class="muted">输入：${escapeHtml(t.input||'')}</span><br>${escapeHtml(t.output||'')}</div>`;
+    });
+  }
+  box.innerHTML=h;
+}
+function updateFrameScale(){
+  document.getElementById('frameScaleLabel').textContent=totalFrames?`0-${Math.max(0,totalFrames-1)} 帧统一基准`:'统一帧号基准';
+}
+function getTimelineTotal(){
+  let maxFrame=totalFrames||0;
+  events.forEach(ev=>{maxFrame=Math.max(maxFrame,Number(ev.frame_end)||0);});
+  lifelines.forEach(line=>(line.segments||[]).forEach(seg=>{maxFrame=Math.max(maxFrame,Number(seg.frame_end)||0);}));
+  return Math.max(1,maxFrame);
+}
+
+// Entities and KG evidence
+function renderEntities(){
+  const list=document.getElementById('entityList');
+  document.getElementById('entityCountText').textContent=`${entities.length} 个实体`;
+  if(!entities.length){
+    list.innerHTML='<div class="panel-empty">上传视频后显示 Person 生命线</div>';
+    return;
+  }
+  list.innerHTML='';
+  entities.slice().sort((a,b)=>entityIndex(a.entity_id)-entityIndex(b.entity_id)).forEach(ent=>{
+    const item=document.createElement('div');
+    item.className='entity-item'+(ent.entity_id===selectedEntity?' active':'');
+    item.onclick=()=>selectEntity(ent.entity_id);
+    const tracks=(ent.track_ids||[]).join(', ')||'-';
+    const summary=decodeMaybeJson(ent.trajectory_summary)||{};
+    const points=summary.point_count||0;
+    const candidates=(ent.tentative_merge_candidates||[]).join(', ');
+    item.innerHTML=`<div class="entity-main"><span class="entity-name" style="color:${entityColor(ent.entity_id)}">${escapeHtml(ent.entity_id)}</span><span class="quality">${qualityLabel(ent.tracking_quality)}</span></div>
+      <div class="entity-meta">
+        <span>帧 ${ent.first_seen_frame}-${ent.last_seen_frame}</span><span>轨迹点 ${points}</span>
+        <span>track ${escapeHtml(tracks)}</span><span>${candidates?'候选 '+escapeHtml(candidates):'无候选合并'}</span>
+      </div>`;
+    list.appendChild(item);
+  });
+}
+function selectEntity(entityId,jump=true){
+  selectedEntity=entityId;
+  const ent=entities.find(e=>e.entity_id===entityId);
+  if(ent&&jump&&framePrefix)showFrame(Number(ent.last_seen_frame)||playingFrame||0);
+  renderEntities();renderLifelines();renderEvidence();
+  const snap=frameBboxes[playingFrame];
+  if(snap)drawSelectedHighlight(snap);
+}
+function renderEvidence(){
+  const box=document.getElementById('kgEvidence');
+  const nodes=kgGraph.nodes||[],edges=kgGraph.edges||[];
+  document.getElementById('kgCountText').textContent=`${nodes.length} 节点 / ${edges.length} 边`;
+  if(!selectedEntity){
+    box.innerHTML='<div class="panel-empty">选择一个实体查看 1-2 跳证据链</div>';
+    return;
+  }
+  const related=edges.filter(edge=>{
+    const near=edge.src===selectedEntity||edge.tgt===selectedEntity||isNeighborOfSelected(edge);
+    return near&&(kgFilter==='all'||edge.edge_type===kgFilter);
+  });
+  const ent=entities.find(e=>e.entity_id===selectedEntity)||{};
+  const summary=decodeMaybeJson(ent.trajectory_summary)||{};
+  let h=`<div class="node-card"><b style="color:${entityColor(selectedEntity)}">${escapeHtml(selectedEntity)}</b><br>
+    <span class="muted">track ${(ent.track_ids||[]).join(', ')||'-'} · ${qualityLabel(ent.tracking_quality)}</span><br>
+    <span class="muted">轨迹摘要：${formatTrajectorySummary(summary)}</span></div>`;
+  if(!related.length){
+    h+='<div class="panel-empty">当前过滤条件下暂无关联边。</div>';
+  }else{
+    related.forEach(edge=>{
+      h+=formatEdge(edge);
+    });
+  }
+  box.innerHTML=h;
+}
+function isNeighborOfSelected(edge){
+  const edges=kgGraph.edges||[];
+  const neighbors=new Set();
+  edges.forEach(e=>{
+    if(e.src===selectedEntity)neighbors.add(e.tgt);
+    if(e.tgt===selectedEntity)neighbors.add(e.src);
+  });
+  return neighbors.has(edge.src)||neighbors.has(edge.tgt);
+}
+function setKGFilter(filter){
+  kgFilter=filter;
+  document.querySelectorAll('#kgFilters button').forEach(btn=>btn.classList.toggle('active',btn.dataset.filter===filter));
+  renderEvidence();
+}
+function formatEdge(edge){
+  const type=edge.edge_type||'relation';
+  const evidence=decodeMaybeJson(edge.evidence_events)||decodeMaybeJson(edge.evidence)||[];
+  const count=edge.count||edge.interaction_count||'';
+  const label=edgeLabel(type);
+  const evText=Array.isArray(evidence)&&evidence.length?`证据事件：${evidence.slice(-3).join(', ')}`:'证据随 KG 边聚合';
+  return `<div class="kg-edge ${escapeHtml(type)}"><b>${escapeHtml(edge.src)} → ${escapeHtml(edge.tgt)}</b><br>
+    ${escapeHtml(label)} ${count?`· ${count} 次`:''}<br><span class="muted">${escapeHtml(evText)}</span></div>`;
+}
+
+// Playback
+function showFrame(n){
+  if(!framePrefix||!totalFrames)return;
+  playingFrame=Math.max(0,Math.min(totalFrames-1,Math.round(n)||0));
+  const img=new Image();
+  img.onload=()=>{
+    if(!canvasSized){canvas.width=img.naturalWidth;canvas.height=img.naturalHeight;canvasSized=true;}
+    ctx.drawImage(img,0,0,canvas.width,canvas.height);
+    drawSelectedHighlight(frameBboxes[playingFrame]||{});
+    renderTimeline();
+  };
+  img.src=framePrefix+String(playingFrame).padStart(6,'0')+'.jpg';
+  document.getElementById('scrubBar').value=playingFrame;
+}
+function playFrom(n){
+  stopPlay();
+  playingFrame=Number.isFinite(n)?n:playingFrame;
+  playTimer=setInterval(()=>{
+    if(playingFrame>=totalFrames-1){stopPlay();return;}
+    showFrame(playingFrame+1);
+  },1000/Math.max(1,fps));
+}
+function stopPlay(){if(playTimer){clearInterval(playTimer);playTimer=null;}}
+function drawSelectedHighlight(snap){
+  const bbox=selectedEntity?snap[selectedEntity]:(selectedPerson?snap[selectedPerson]:null);
+  if(!bbox)return;
+  drawHighlight(bbox);
+}
+function drawHighlight(bbox){
+  ctx.save();
+  ctx.strokeStyle='#f0a040';ctx.lineWidth=3;ctx.shadowColor='rgba(240,160,64,0.65)';ctx.shadowBlur=8;
+  ctx.strokeRect(bbox[0],bbox[1],bbox[2]-bbox[0],bbox[3]-bbox[1]);
+  ctx.restore();
+}
+
+// Chat
+function addChatMsg(role,html){
+  const div=document.createElement('div');div.className='chat-msg '+role;
+  const bub=document.createElement('div');bub.className='bubble';bub.innerHTML=html;
+  div.appendChild(bub);
+  const msgs=document.getElementById('chatMsgs');msgs.appendChild(div);
+  msgs.scrollTop=msgs.scrollHeight;
+}
+function formatEventMsg(ev){
+  let h=`<b>[${Number(ev.duration?.[0]||0).toFixed(0)}-${Number(ev.duration?.[1]||0).toFixed(0)}s]</b> ${ev.entity_count||0} 个目标`;
+  if(ev.summary)h+=`<br>${escapeHtml(String(ev.summary).substring(0,200))}`;
+  if(ev.trail&&ev.trail.length){
+    h+=`<br><span class="trail-toggle" onclick="toggleTrail(this)">展开推理链</span><div class="trail-box">`;
+    ev.trail.forEach(t=>{h+=`<div class="trail-step"><span class="t-agent">${escapeHtml(t.agent||'Agent')}</span><br>输入: ${escapeHtml(t.input||'')}<br>输出: ${escapeHtml(String(t.output||'').substring(0,120))}</div>`;});
+    h+='</div>';
+  }
+  return h;
+}
+function toggleTrail(el){
+  const box=el.nextElementSibling;
+  box.classList.toggle('open');
+  el.textContent=box.classList.contains('open')?'收起推理链':'展开推理链';
+}
+async function sendChat(){
+  const input=document.getElementById('chatInput'),q=input.value.trim();
+  if(!q||!videoId)return;
+  input.value='';addChatMsg('user',escapeHtml(q));
+  const r=await fetch('/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({video_id:videoId,question:q})});
+  const d=await r.json();addChatMsg('agent',escapeHtml(d.answer||'无回答'));
+}
+
+// Canvas / video click
+canvas.onclick=handleVideoClick;
+const videoEl=document.getElementById('videoPlayer');
+videoEl.onclick=e=>handlePointerPick(e,videoEl,videoEl.videoWidth,videoEl.videoHeight);
+function handleVideoClick(e){handlePointerPick(e,canvas,canvas.width,canvas.height);}
+function handlePointerPick(e,el,naturalW,naturalH){
+  const rect=el.getBoundingClientRect();
+  const sx=naturalW/rect.width,sy=naturalH/rect.height;
+  const x=(e.clientX-rect.left)*sx,y=(e.clientY-rect.top)*sy;
+  for(const [tid,p] of Object.entries(personMap)){
+    const b=p.bbox; if(!b)continue;
+    if(x>=b[0]&&x<=b[2]&&y>=b[1]&&y<=b[3]){
+      selectedPerson=tid;selectedEntity=p.entity_id||selectedEntity;
+      selectEntity(selectedEntity,false);
+      showPersonCard(tid,p);
+      return;
+    }
+  }
+  hidePersonCard();
+}
+function showPersonCard(tid,p){
+  const eid=p.entity_id||`Track-${tid}`;
+  const card=document.getElementById('personCard');
+  card.style.display='';
+  let md=null;
+  for(let i=events.length-1;i>=0;i--){
+    const found=(events[i].motions||[]).find(m=>m.entity_id===eid);
+    if(found&&found.data){md=found.data;break;}
+  }
+  const ent=entities.find(e=>e.entity_id===eid)||{};
+  const color=entityColor(eid);
+  let h=`<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
+    <span class="ent-id" style="color:${color};font-size:15px">${escapeHtml(eid)}</span>
+    <span style="font-size:10px;color:var(--muted);background:var(--bg);padding:1px 6px;border-radius:3px">track #${escapeHtml(String(tid))}</span>
+  </div>`;
+  h+=`<div style="color:var(--muted);font-size:11px;margin-bottom:8px">质量：${qualityLabel(ent.tracking_quality)} · 帧 ${ent.first_seen_frame??'-'}-${ent.last_seen_frame??'-'}</div>`;
+  if(md){
+    const rows=[
+      ['运动标签',`<b style="color:${color}">${escapeHtml(md.label||'?')}</b>`],
+      ['速度',`${escapeHtml(String(md.speed_px||0))} px/s`],
+      ['速度百分位',`P${md.speed_pct!=null?escapeHtml(String(md.speed_pct)):'-'}`],
+      ['方向变化',`${escapeHtml(String(md.direction_change||0))} 次`],
+      ['姿态',escapeHtml(md.pose||'-')],
+      ['持续',`${escapeHtml(String(md.duration||0))}s`],
+      ['置信度',`${(((md.confidence||0)*100)).toFixed(0)}%`],
+    ];
+    h+='<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;font-size:11px">';
+    rows.forEach(([k,v])=>{h+=`<div style="color:var(--muted)">${k}</div><div style="text-align:right">${v}</div>`;});
+    h+='</div>';
+  }else{
+    h+='<div class="motion">暂无 Agent 运动描述，已保留检测框和 Entity 证据。</div>';
+  }
+  h+=`<div style="margin-top:8px;color:var(--muted);font-size:10px">bbox: [${(p.bbox||[]).map(v=>Math.round(v)).join(', ')}]</div>`;
+  document.getElementById('personContent').innerHTML=h;
+}
+function hidePersonCard(){document.getElementById('personCard').style.display='none';selectedPerson=null;}
+
+// Helpers
+function setStatus(st,text){
+  const dot=document.getElementById('statusDot');
+  dot.className='status-dot '+st;
+  document.getElementById('statusText').textContent=text;
+}
+function entityIndex(id){const m=String(id||'').match(/\d+/);return m?parseInt(m[0],10):9999;}
+function entityColor(id){return ENTITY_COLORS[entityIndex(id)%ENTITY_COLORS.length];}
+function qualityLabel(q){
+  const labels={stable:'稳定',occluded:'遮挡重连',fragmented:'疑似断裂',tentative:'候选合并'};
+  return labels[q]||'未知';
+}
+function edgeLabel(t){
+  const labels={belongs_to:'属于事件',interacts_with:'存在交互',matches:'匹配证据',next:'时序相邻',violates:'触发规则'};
+  return labels[t]||t;
+}
+function decodeMaybeJson(value){
+  if(value==null)return value;
+  if(typeof value!=='string')return value;
+  const text=value.trim();
+  if(!text||!['{','['].includes(text[0]))return value;
+  try{return JSON.parse(text);}catch(_){return value;}
+}
+function formatTrajectorySummary(summary){
+  if(!summary||typeof summary!=='object')return '暂无';
+  const parts=[];
+  if(summary.point_count!=null)parts.push(`${summary.point_count} 点`);
+  if(Array.isArray(summary.activity_bbox))parts.push(`活动框 [${summary.activity_bbox.map(v=>Math.round(v)).join(', ')}]`);
+  return parts.join('，')||'暂无';
+}
+function formatEventTooltip(ev){
+  return `帧 ${ev.frame_start}-${ev.frame_end}<br>${ev.entity_count||0} 个目标<br>${escapeHtml(ev.summary||'点击查看事件详情')}`;
+}
+function escapeHtml(s){
+  return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+// Resize
+(function(){
+  const rp=document.getElementById('rightPanel');
+  const savedW=localStorage.getItem('scenesense:panelW');
+  if(savedW)rp.style.width=savedW+'px';
+  document.getElementById('resizeMain').addEventListener('mousedown',e=>{
+    e.preventDefault();document.getElementById('resizeMain').classList.add('active');
+    const sx=e.clientX,sw=rp.offsetWidth;
+    const onMove=ev=>{const w=Math.max(300,sw+sx-ev.clientX);rp.style.width=w+'px';};
+    const onUp=()=>{document.getElementById('resizeMain').classList.remove('active');document.removeEventListener('mousemove',onMove);document.removeEventListener('mouseup',onUp);localStorage.setItem('scenesense:panelW',rp.offsetWidth);};
+    document.addEventListener('mousemove',onMove);document.addEventListener('mouseup',onUp);
+  });
+
+  const ep=document.getElementById('entityPanel');
+  const savedH=localStorage.getItem('scenesense:entityH');
+  if(savedH)ep.style.flexBasis=savedH+'px';
+  document.getElementById('resizeAgent').addEventListener('mousedown',e=>{
+    e.preventDefault();document.getElementById('resizeAgent').classList.add('active');
+    const sy=e.clientY,sh=ep.offsetHeight;
+    const onMove=ev=>{const h=Math.max(150,sh+ev.clientY-sy);ep.style.flexBasis=h+'px';};
+    const onUp=()=>{document.getElementById('resizeAgent').classList.remove('active');document.removeEventListener('mousemove',onMove);document.removeEventListener('mouseup',onUp);localStorage.setItem('scenesense:entityH',ep.offsetHeight);};
+    document.addEventListener('mousemove',onMove);document.addEventListener('mouseup',onUp);
+  });
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,37 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+.env
+.venv/
+venv/
+
+.superpowers/
+.claude/
+.codex/
+.playwright-mcp/
+.mcp.json
+
+# Local media, model weights, generated artifacts
+*.mp4
+*.avi
+*.mkv
+*.mov
+*.pt
+*.graphml
+*.jpg
+*.jpeg
+*.png
+
+outputs/
+uploads/
+kg_outputs/
+MOT17/
+UCSD_P2_224_8*/
+test_data/
+references/
+
+# Local experiment dumps
+results*.json
+mot17*.json
+ucsd*.json

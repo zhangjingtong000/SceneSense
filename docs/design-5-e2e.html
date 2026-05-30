@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>设计 5/5 — 端到端数据流与验收</title>
+<style>
+  :root {
+    --bg: #0b1120;
+    --panel: #111827;
+    --border: #1e293b;
+    --text: #e5e7eb;
+    --muted: #64748b;
+    --blue: #38bdf8;
+    --amber: #f59e0b;
+    --red: #ef4444;
+    --green: #22c55e;
+    --accent: #2563eb;
+  }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body {
+    font-family: system-ui, -apple-system, 'Segoe UI', sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    max-width: 800px;
+    margin: 0 auto;
+    padding: 40px 20px;
+    line-height: 1.7;
+  }
+  h2 {
+    font-size: 22px;
+    margin-bottom: 4px;
+  }
+  .subtitle {
+    color: var(--muted);
+    margin-bottom: 32px;
+    font-size: 14px;
+  }
+  .mockup {
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+    margin-bottom: 28px;
+  }
+  .mockup-header {
+    background: var(--panel);
+    padding: 8px 14px;
+    font-size: 12px;
+    color: var(--muted);
+    border-bottom: 1px solid var(--border);
+  }
+  .mockup-body {
+    background: #020617;
+    padding: 14px;
+  }
+  .section {
+    margin-bottom: 24px;
+  }
+  .section h3 {
+    font-size: 15px;
+    margin-bottom: 10px;
+  }
+  .section p {
+    font-size: 13px;
+    color: var(--muted);
+    line-height: 1.6;
+  }
+  .options {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+  .option {
+    display: flex;
+    gap: 14px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 14px;
+  }
+  .option .letter {
+    width: 32px; height: 32px;
+    border-radius: 50%;
+    background: var(--accent);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 700;
+    font-size: 14px;
+    flex-shrink: 0;
+  }
+  .option h3 {
+    font-size: 14px;
+    margin-bottom: 2px;
+  }
+  .option p {
+    font-size: 12px;
+    color: var(--muted);
+    line-height: 1.5;
+  }
+</style>
+</head>
+<body>
+
+<h2>设计 5/5：端到端数据流与验收</h2>
+<p class="subtitle">第一阶段目标：从视频输入到 UI 展示，都能围绕稳定 Person 实体连续解释。</p>
+
+<div class="mockup">
+  <div class="mockup-header">Pipeline after optimization</div>
+  <div class="mockup-body">
+    <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:10px;font-size:12px">
+      <div style="padding:14px;background:#111827;border-radius:8px"><b>0. Detection</b><br><span style="color:#94a3b8">YOLO + tuned params</span></div>
+      <div style="padding:14px;background:#111827;border-radius:8px"><b>1. Tracking</b><br><span style="color:#94a3b8">track segments + quality</span></div>
+      <div style="padding:14px;background:#111827;border-radius:8px"><b>2. EntityProfile</b><br><span style="color:#94a3b8">track → Person mapping</span></div>
+      <div style="padding:14px;background:#111827;border-radius:8px"><b>3. KG</b><br><span style="color:#94a3b8">Entity/Event edges</span></div>
+      <div style="padding:14px;background:#111827;border-radius:8px"><b>4. UI</b><br><span style="color:#94a3b8">lifeline + evidence</span></div>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <h3>Runtime flow</h3>
+  <p>每帧检测和跟踪后，EntityProfile 更新 track→Person 映射。每 60 帧仍构建 SpatioTemporalEvent，但同时带着映射写 KG：Person 节点、Event 节点、belongs_to、next、累计 interacts_with。WebSocket 推送除了原 event，还推 <code>entities</code>、<code>lifelines</code>、<code>kg_subgraph</code> 的轻量数据。</p>
+</div>
+
+<div class="section">
+  <h3>验收标准</h3>
+  <div class="options">
+    <div class="option">
+      <div class="letter">A</div>
+      <div class="content">
+        <h3>连续性</h3>
+        <p>同一人遮挡后重现时，UI 主显示仍为同一个 Person，断点用虚线，原始 track IDs 可查。</p>
+      </div>
+    </div>
+    <div class="option">
+      <div class="letter">B</div>
+      <div class="content">
+        <h3>时间轴对齐</h3>
+        <p>事件热力和生命线严格按 frame scale 对齐，跳转到任意 Event 不漂移。</p>
+      </div>
+    </div>
+    <div class="option">
+      <div class="letter">C</div>
+      <div class="content">
+        <h3>KG 证据可追溯</h3>
+        <p>点击 Person 能看到 1-2 跳证据子图，边上有帧范围、置信度、来源 Agent、原始 track 证据。</p>
+      </div>
+    </div>
+    <div class="option">
+      <div class="letter">D</div>
+      <div class="content">
+        <h3>性能不退化</h3>
+        <p>KG 节点只存轨迹统计摘要，完整轨迹留在 EntityProfile；GraphML 保存不因轨迹点膨胀明显变慢。</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <h3>实施顺序</h3>
+  <p>Layer 0 和 Layer 1 并行；Layer 2 依赖 EntityProfile；Layer 3/4 依赖 KG 的实体/事件/边数据。每层都先做最小闭环，再加细节。</p>
+</div>
+
+</body>
+</html>
