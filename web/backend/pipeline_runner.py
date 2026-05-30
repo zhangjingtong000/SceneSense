@@ -15,6 +15,7 @@ from perception.metrics import TrackerMetrics
 from perception.tracker import MultiObjectTracker
 from perception.event_builder import EventBuilder
 from agents.llm_client import LLMClient
+from agents.env import get_local_env
 from agents.trajectory_agent import TrajectoryAgent
 from agents.interaction_agent import InteractionAgent
 from agents.summary_agent import SummaryAgent
@@ -129,7 +130,7 @@ async def run_pipeline(video_path: str, video_id: str, websocket, api_key: str =
     await asyncio.sleep(0)
 
     graphstore = GraphStore(use_directed=True)
-    kit = os.getenv("DEEPSEEK_API_KEY", api_key)
+    kit = api_key or get_local_env("DEEPSEEK_API_KEY")
     llm = LLMClient(api_key=kit) if kit else None
 
     orch = None
