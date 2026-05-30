@@ -1,5 +1,7 @@
 import time
 
+import numpy as np
+
 from kg.continuity import write_continuity_event
 from kg.graph_store import GraphStore
 
@@ -183,3 +185,24 @@ def test_entity_node_does_not_store_global_trajectory_when_profile_contains_one(
     entity_node = graphstore.get_node("Person-1")
     assert "trajectory_summary" in entity_node
     assert "global_trajectory" not in entity_node
+
+
+def test_graph_store_encodes_numpy_properties_for_frontend_and_graphml(tmp_path):
+    graphstore = GraphStore()
+    graphstore.upsert_node(
+        "Person-numpy",
+        "Entity",
+        {
+            "score": np.float32(0.5),
+            "track_ids": np.array([1, 2], dtype=np.int64),
+            "trajectory_summary": {"activity_bbox": np.array([1, 2, 3, 4], dtype=np.float32)},
+        },
+    )
+
+    node = graphstore.get_node("Person-numpy")
+    assert node["score"] == 0.5
+    assert node["track_ids"] == "[1, 2]"
+
+    output = tmp_path / "numpy.graphml"
+    graphstore.save(str(output))
+    assert output.exists()
