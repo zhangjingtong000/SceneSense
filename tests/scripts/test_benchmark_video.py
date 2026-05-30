@@ -59,8 +59,11 @@ def test_print_summary_outputs_terminal_tables(capsys):
                 "with_gmc": True,
             },
             "entity": {
-                "auto_merge_threshold": 0.78,
+                "auto_merge_threshold": 0.72,
                 "tentative_threshold": 0.3,
+                "promotion_min_observations": 5,
+                "promotion_min_score": 0.55,
+                "promotion_min_position_score": 0.25,
             },
         },
         "metrics": {
@@ -101,3 +104,5 @@ def test_parser_supports_optional_entity_debug():
 
     assert args.entity_debug is True
     assert args.entity_auto_threshold == 0.72
+    assert args.entity_promotion_observations == 5
+    assert args.entity_promotion_position == 0.25
