@@ -70,7 +70,13 @@ def benchmark_video(args: argparse.Namespace) -> dict[str, Any]:
         with_reid=args.with_reid,
         with_gmc=not args.no_gmc,
     )
-    profiles = EntityProfileManager(enable_debug=args.entity_debug)
+    profiles = EntityProfileManager(
+        auto_merge_threshold=args.entity_auto_threshold,
+        tentative_threshold=args.entity_tentative_threshold,
+        max_merge_gap_frames=args.entity_max_gap,
+        max_position_gap_px=args.entity_max_position_gap,
+        enable_debug=args.entity_debug,
+    )
     metrics = TrackerMetrics()
     event_builder = EventBuilder(
         event_interval_frames=args.event_interval,
@@ -160,6 +166,12 @@ def benchmark_video(args: argparse.Namespace) -> dict[str, Any]:
                 "event_interval_frames": args.event_interval,
                 "spatial_neighbor_threshold": args.spatial_threshold,
             },
+            "entity": {
+                "auto_merge_threshold": args.entity_auto_threshold,
+                "tentative_threshold": args.entity_tentative_threshold,
+                "max_merge_gap_frames": args.entity_max_gap,
+                "max_position_gap_px": args.entity_max_position_gap,
+            },
         },
         "metrics": {
             "tracker": metrics.to_dict(),
@@ -224,6 +236,8 @@ def print_summary(result: dict[str, Any]) -> None:
         ("matching_threshold", params["tracker"]["minimum_matching_threshold"]),
         ("with_reid", params["tracker"]["with_reid"]),
         ("with_gmc", params["tracker"]["with_gmc"]),
+        ("entity_auto", params["entity"]["auto_merge_threshold"]),
+        ("entity_tentative", params["entity"]["tentative_threshold"]),
     ])
 
     print("\nMetrics")
@@ -284,6 +298,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--with-reid", action="store_true", help="启用 tracker 内置 ReID")
     parser.add_argument("--no-gmc", action="store_true", help="关闭相机运动补偿")
     parser.add_argument("--entity-debug", action="store_true", help="在 JSON 中写入 Entity 融合候选评分日志")
+    parser.add_argument("--entity-auto-threshold", type=float, default=0.78, help="Entity 自动合并阈值")
+    parser.add_argument("--entity-tentative-threshold", type=float, default=0.30, help="Entity 候选合并阈值")
+    parser.add_argument("--entity-max-gap", type=int, default=150, help="Entity 合并最大帧间隔")
+    parser.add_argument("--entity-max-position-gap", type=float, default=140.0, help="Entity 合并最大位置间隔，像素")
     return parser
 
 
