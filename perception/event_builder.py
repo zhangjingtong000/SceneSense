@@ -5,6 +5,8 @@ import math
 import cv2
 import numpy as np
 
+from utils.serialization import to_jsonable
+
 
 class EventBuilder:
     def __init__(
@@ -57,6 +59,7 @@ class EventBuilder:
             "zone_id": zone_id,
             "zone_type": zone_type,
         }
+        event = to_jsonable(event)
 
         event_hash = hashlib.md5(
             json.dumps(event, sort_keys=True).encode()

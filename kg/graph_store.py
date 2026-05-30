@@ -6,6 +6,8 @@ from typing import Any
 import networkx as nx
 from networkx.algorithms import isomorphism
 
+from utils.serialization import to_jsonable
+
 
 class GraphStore:
     def __init__(self, use_directed: bool = True):
@@ -17,6 +19,7 @@ class GraphStore:
 
     @staticmethod
     def encode_property(value: Any) -> Any:
+        value = to_jsonable(value)
         if isinstance(value, (dict, list)):
             return json.dumps(value, ensure_ascii=False)
         return value
