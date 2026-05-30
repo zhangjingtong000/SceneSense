@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>设计 4/5 — 检测与跟踪优化边界</title>
+<style>
+  :root {
+    --bg: #0b1120;
+    --panel: #111827;
+    --border: #1e293b;
+    --text: #e5e7eb;
+    --muted: #64748b;
+    --blue: #38bdf8;
+    --amber: #f59e0b;
+    --red: #ef4444;
+    --green: #22c55e;
+    --accent: #2563eb;
+  }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body {
+    font-family: system-ui, -apple-system, 'Segoe UI', sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    max-width: 800px;
+    margin: 0 auto;
+    padding: 40px 20px;
+    line-height: 1.7;
+  }
+  h2 {
+    font-size: 22px;
+    margin-bottom: 4px;
+  }
+  .subtitle {
+    color: var(--muted);
+    margin-bottom: 32px;
+    font-size: 14px;
+  }
+  .options {
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+    margin-bottom: 28px;
+  }
+  .option {
+    display: flex;
+    gap: 14px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 16px;
+  }
+  .option .letter {
+    width: 36px; height: 36px;
+    border-radius: 50%;
+    background: var(--accent);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 700;
+    font-size: 16px;
+    flex-shrink: 0;
+  }
+  .option h3 {
+    font-size: 15px;
+    margin-bottom: 4px;
+  }
+  .option p {
+    font-size: 13px;
+    color: var(--muted);
+    line-height: 1.6;
+  }
+  .mockup {
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+    margin-bottom: 28px;
+  }
+  .mockup-header {
+    background: var(--panel);
+    padding: 8px 14px;
+    font-size: 12px;
+    color: var(--muted);
+    border-bottom: 1px solid var(--border);
+  }
+  .mockup-body {
+    background: #020617;
+    padding: 14px;
+  }
+  .section {
+    margin-bottom: 24px;
+  }
+  .section h3 {
+    font-size: 15px;
+    margin-bottom: 6px;
+  }
+  .section p {
+    font-size: 13px;
+    color: var(--muted);
+    line-height: 1.6;
+  }
+</style>
+</head>
+<body>
+
+<h2>设计 4/5：检测与跟踪优化边界</h2>
+<p class="subtitle">第一阶段不换 tracker，不上高级 ReID。目标是减少小人物漏检、遮挡断 ID 对连续理解的破坏。</p>
+
+<div class="options">
+  <div class="option">
+    <div class="letter">0</div>
+    <div class="content">
+      <h3>Tracker 参数层</h3>
+      <p>统一 web/CLI 参数入口：<code>conf</code>, <code>imgsz</code>, <code>track_activation_threshold</code>, <code>new_track_thresh</code>, <code>lost_track_buffer</code>, ReID/GMC 开关。默认针对人群小目标提高 <code>imgsz</code>、适当降低检测阈值、延长 lost buffer。</p>
+    </div>
+  </div>
+  <div class="option">
+    <div class="letter">1</div>
+    <div class="content">
+      <h3>Entity 融合门控</h3>
+      <p>遮挡后新 track 出现时，按 frame gap、预测位置、bbox 尺寸、方向、已有 ResNet18 appearance feature 做保守评分。高置信自动并入同一 Person，低置信只记录候选。</p>
+    </div>
+  </div>
+  <div class="option">
+    <div class="letter">2</div>
+    <div class="content">
+      <h3>质量标注</h3>
+      <p>每个 Person/segment 记录 <code>tracking_quality</code>: stable / occluded / fragmented / tentative。Agent 和 UI 都能看到"数据质量"，避免把检测断裂误判成行为异常。</p>
+    </div>
+  </div>
+</div>
+
+<div class="mockup">
+  <div class="mockup-header">First-stage matching signals</div>
+  <div class="mockup-body">
+    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;">
+      <div style="padding:12px;background:#111827;border-radius:8px"><b>Frame gap</b><br><span style="color:#94a3b8;font-size:13px">shorter is safer</span></div>
+      <div style="padding:12px;background:#111827;border-radius:8px"><b>Predicted position</b><br><span style="color:#94a3b8;font-size:13px">Kalman/proximity</span></div>
+      <div style="padding:12px;background:#111827;border-radius:8px"><b>BBox shape</b><br><span style="color:#94a3b8;font-size:13px">height/width continuity</span></div>
+      <div style="padding:12px;background:#111827;border-radius:8px"><b>Appearance</b><br><span style="color:#94a3b8;font-size:13px">existing ResNet18 feature</span></div>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <h3>明确不做</h3>
+  <p>不替换成完整 BoT-SORT/Deep-OC-SORT，不训练新 ReID，不做多摄像头身份重识别。现有 tracker 的输出保持兼容，EntityProfile 在它上面吸收断裂。</p>
+</div>
+
+<div class="section">
+  <h3>验证</h3>
+  <p>用 MOT17/现有上传样本验证：ID switch 数量、fragmented Person 数、平均 track segment 数、生命线缺口是否被正确标注。UI 上必须能看出"遮挡后重新接上"的虚线。</p>
+</div>
+
+</body>
+</html>
