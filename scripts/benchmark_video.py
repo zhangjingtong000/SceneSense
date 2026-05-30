@@ -75,6 +75,11 @@ def benchmark_video(args: argparse.Namespace) -> dict[str, Any]:
         tentative_threshold=args.entity_tentative_threshold,
         max_merge_gap_frames=args.entity_max_gap,
         max_position_gap_px=args.entity_max_position_gap,
+        promotion_min_observations=args.entity_promotion_observations,
+        promotion_min_score=args.entity_promotion_score,
+        promotion_min_position_score=args.entity_promotion_position,
+        promotion_min_direction_score=args.entity_promotion_direction,
+        promotion_min_appearance_score=args.entity_promotion_appearance,
         enable_debug=args.entity_debug,
     )
     metrics = TrackerMetrics()
@@ -171,6 +176,11 @@ def benchmark_video(args: argparse.Namespace) -> dict[str, Any]:
                 "tentative_threshold": args.entity_tentative_threshold,
                 "max_merge_gap_frames": args.entity_max_gap,
                 "max_position_gap_px": args.entity_max_position_gap,
+                "promotion_min_observations": args.entity_promotion_observations,
+                "promotion_min_score": args.entity_promotion_score,
+                "promotion_min_position_score": args.entity_promotion_position,
+                "promotion_min_direction_score": args.entity_promotion_direction,
+                "promotion_min_appearance_score": args.entity_promotion_appearance,
             },
         },
         "metrics": {
@@ -238,6 +248,9 @@ def print_summary(result: dict[str, Any]) -> None:
         ("with_gmc", params["tracker"]["with_gmc"]),
         ("entity_auto", params["entity"]["auto_merge_threshold"]),
         ("entity_tentative", params["entity"]["tentative_threshold"]),
+        ("promotion_obs", params["entity"]["promotion_min_observations"]),
+        ("promotion_score", params["entity"]["promotion_min_score"]),
+        ("promotion_pos", params["entity"]["promotion_min_position_score"]),
     ])
 
     print("\nMetrics")
@@ -298,10 +311,15 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--with-reid", action="store_true", help="启用 tracker 内置 ReID")
     parser.add_argument("--no-gmc", action="store_true", help="关闭相机运动补偿")
     parser.add_argument("--entity-debug", action="store_true", help="在 JSON 中写入 Entity 融合候选评分日志")
-    parser.add_argument("--entity-auto-threshold", type=float, default=0.78, help="Entity 自动合并阈值")
+    parser.add_argument("--entity-auto-threshold", type=float, default=0.72, help="Entity 自动合并阈值")
     parser.add_argument("--entity-tentative-threshold", type=float, default=0.30, help="Entity 候选合并阈值")
     parser.add_argument("--entity-max-gap", type=int, default=150, help="Entity 合并最大帧间隔")
     parser.add_argument("--entity-max-position-gap", type=float, default=140.0, help="Entity 合并最大位置间隔，像素")
+    parser.add_argument("--entity-promotion-observations", type=int, default=5, help="tentative 提升为 merge 所需连续观测数")
+    parser.add_argument("--entity-promotion-score", type=float, default=0.55, help="tentative 提升所需最低候选分数")
+    parser.add_argument("--entity-promotion-position", type=float, default=0.25, help="tentative 提升所需最低空间位置分数")
+    parser.add_argument("--entity-promotion-direction", type=float, default=0.45, help="tentative 提升所需最低方向一致性")
+    parser.add_argument("--entity-promotion-appearance", type=float, default=0.65, help="tentative 提升所需最低 appearance 相似度")
     return parser
 
 

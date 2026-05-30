@@ -1,14 +1,14 @@
 from perception.entity_profile import EntityProfileManager
 
 
-def track(track_id, frame, x, y, feature=None):
+def track(track_id, frame, x, y, feature=None, direction=0.0):
     return {
         "track_id": track_id,
         "bbox": [x - 5, y - 10, x + 5, y + 10],
         "centroid": [x, y],
         "trajectory": [[x, y, frame / 30.0]],
         "velocity_ms": 1.0,
-        "direction_deg": 0.0,
+        "direction_deg": direction,
         "appearance_feature": feature or [1.0, 0.0, 0.0],
     }
 
@@ -206,3 +206,73 @@ def test_debug_summary_records_candidate_scores_and_blockers():
     assert summary["records"][1]["track_id"] == 17
     assert summary["records"][1]["top_candidates"][0]["entity_id"] == "Person-1"
     assert "position_score" in summary["records"][1]["top_candidates"][0]["factors"]
+
+
+def test_tentative_candidate_promotes_after_sustained_match():
+    mgr = EntityProfileManager(
+        auto_merge_threshold=0.99,
+        tentative_threshold=0.3,
+        promotion_min_observations=3,
+        promotion_min_score=0.5,
+        promotion_min_position_score=0.2,
+        promotion_min_direction_score=0.7,
+        promotion_min_appearance_score=0.7,
+        enable_debug=True,
+    )
+    mgr.update([track(3, 10, 100, 100, [1.0, 0.0], direction=12)], frame_idx=10, timestamp=10 / 30.0)
+    first = mgr.update([track(17, 18, 106, 102, [0.98, 0.02], direction=14)], frame_idx=18, timestamp=18 / 30.0)
+    second = mgr.update([track(17, 19, 108, 103, [0.98, 0.02], direction=13)], frame_idx=19, timestamp=19 / 30.0)
+    third = mgr.update([track(17, 20, 110, 104, [0.98, 0.02], direction=12)], frame_idx=20, timestamp=20 / 30.0)
+
+    assert first[0]["entity_id"] == "Person-2"
+    assert second[0]["entity_id"] == "Person-2"
+    assert third[0]["entity_id"] == "Person-1"
+    assert "Person-2" not in {profile.entity_id for profile in mgr.profiles()}
+    assert mgr.get_profile("Person-1").track_ids == [3, 17]
+    assert mgr.get_profile("Person-1").merge_evidence[-1]["promotion"] == "tentative_sustained_match"
+    assert mgr.debug_summary()["stats"]["promoted_merge"] == 1
+
+
+def test_tentative_candidate_does_not_promote_when_direction_is_inconsistent():
+    mgr = EntityProfileManager(
+        auto_merge_threshold=0.99,
+        tentative_threshold=0.3,
+        promotion_min_observations=3,
+        promotion_min_score=0.5,
+        promotion_min_position_score=0.2,
+        promotion_min_direction_score=0.7,
+        promotion_min_appearance_score=0.7,
+    )
+    mgr.update([track(3, 10, 100, 100, [1.0, 0.0], direction=0)], frame_idx=10, timestamp=10 / 30.0)
+    for frame in [18, 19, 20, 21]:
+        enriched = mgr.update(
+            [track(17, frame, 106 + frame - 18, 102, [0.98, 0.02], direction=180)],
+            frame_idx=frame,
+            timestamp=frame / 30.0,
+        )
+
+    assert enriched[0]["entity_id"] == "Person-2"
+    assert mgr.get_profile("Person-2").tentative_merge_candidates == ["Person-1"]
+
+
+def test_tentative_candidate_does_not_promote_when_position_is_far():
+    mgr = EntityProfileManager(
+        auto_merge_threshold=0.99,
+        tentative_threshold=0.3,
+        max_position_gap_px=1000.0,
+        promotion_min_observations=3,
+        promotion_min_score=0.5,
+        promotion_min_position_score=0.5,
+        promotion_min_direction_score=0.7,
+        promotion_min_appearance_score=0.7,
+    )
+    mgr.update([track(3, 10, 100, 100, [1.0, 0.0], direction=0)], frame_idx=10, timestamp=10 / 30.0)
+    for frame in [18, 19, 20, 21]:
+        enriched = mgr.update(
+            [track(17, frame, 850, 100, [0.98, 0.02], direction=0)],
+            frame_idx=frame,
+            timestamp=frame / 30.0,
+        )
+
+    assert enriched[0]["entity_id"] == "Person-2"
+    assert mgr.get_profile("Person-2").tentative_merge_candidates == ["Person-1"]

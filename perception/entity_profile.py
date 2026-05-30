@@ -25,6 +25,14 @@ def _centroid_distance(a: list[float], b: list[float]) -> float:
     return math.sqrt((float(a[0]) - float(b[0])) ** 2 + (float(a[1]) - float(b[1])) ** 2)
 
 
+def _direction_similarity(a: float | None, b: float | None) -> float:
+    if a is None or b is None:
+        return 0.0
+    delta = abs(float(a) - float(b)) % 360.0
+    delta = min(delta, 360.0 - delta)
+    return max(0.0, 1.0 - delta / 180.0)
+
+
 @dataclass
 class TrackSegment:
     track_id: int
@@ -55,7 +63,9 @@ class EntityProfile:
     last_seen_frame: int = 0
     last_centroid: list[float] = field(default_factory=lambda: [0.0, 0.0])
     last_feature: list[float] = field(default_factory=list)
+    last_direction_deg: float | None = None
     tracking_quality: str = "stable"
+    tentative_merge_observations: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
 
     def trajectory_summary(self) -> dict[str, Any]:
         if not self.global_trajectory:
@@ -84,10 +94,15 @@ class EntityProfile:
 class EntityProfileManager:
     def __init__(
         self,
-        auto_merge_threshold: float = 0.78,
+        auto_merge_threshold: float = 0.72,
         tentative_threshold: float = 0.30,
         max_merge_gap_frames: int = 150,
         max_position_gap_px: float = 140.0,
+        promotion_min_observations: int = 5,
+        promotion_min_score: float = 0.55,
+        promotion_min_position_score: float = 0.25,
+        promotion_min_direction_score: float = 0.45,
+        promotion_min_appearance_score: float = 0.65,
         enable_debug: bool = False,
         max_debug_records: int = 5000,
     ) -> None:
@@ -95,12 +110,18 @@ class EntityProfileManager:
         self.tentative_threshold = tentative_threshold
         self.max_merge_gap_frames = max_merge_gap_frames
         self.max_position_gap_px = max_position_gap_px
+        self.promotion_min_observations = promotion_min_observations
+        self.promotion_min_score = promotion_min_score
+        self.promotion_min_position_score = promotion_min_position_score
+        self.promotion_min_direction_score = promotion_min_direction_score
+        self.promotion_min_appearance_score = promotion_min_appearance_score
         self.enable_debug = enable_debug
         self.max_debug_records = max_debug_records
         self.debug_records: list[dict[str, Any]] = []
         self.debug_stats: dict[str, int] = {
             "auto_merge": 0,
             "tentative": 0,
+            "promoted_merge": 0,
             "new_entity": 0,
             "no_candidate": 0,
         }
@@ -115,6 +136,8 @@ class EntityProfileManager:
             entity_id, merge_evidence = self._resolve_entity(obj, frame_idx, candidate_entity_ids)
             profile = self._profiles[entity_id]
             self._apply_observation(profile, obj, frame_idx, timestamp, merge_evidence)
+            entity_id = self._maybe_promote_tentative(profile, obj, frame_idx) or entity_id
+            profile = self._profiles[entity_id]
 
             out = dict(obj)
             out["entity_id"] = entity_id
@@ -292,7 +315,118 @@ class EntityProfileManager:
         profile.last_seen_frame = frame_idx
         profile.last_centroid = list(obj.get("centroid", profile.last_centroid))
         profile.last_feature = list(obj.get("appearance_feature", profile.last_feature))
+        if "direction_deg" in obj:
+            profile.last_direction_deg = float(obj.get("direction_deg", 0.0))
         self._append_trajectory(profile, obj, timestamp)
+
+    def _maybe_promote_tentative(
+        self,
+        profile: EntityProfile,
+        obj: dict[str, Any],
+        frame_idx: int,
+    ) -> str | None:
+        if not profile.tentative_merge_candidates:
+            return None
+
+        best_candidate_id = ""
+        best_observation: dict[str, Any] | None = None
+        for candidate_id in list(profile.tentative_merge_candidates):
+            candidate = self._profiles.get(candidate_id)
+            if candidate is None:
+                continue
+            score, factors = self._score_candidate(candidate, obj, frame_idx)
+            direction_score = _direction_similarity(
+                candidate.last_direction_deg,
+                float(obj["direction_deg"]) if "direction_deg" in obj else None,
+            )
+            observation = {
+                "frame_idx": frame_idx,
+                "score": round(score, 3),
+                "factors": factors,
+                "direction_score": round(direction_score, 3),
+            }
+            observations = profile.tentative_merge_observations.setdefault(candidate_id, [])
+            observations.append(observation)
+            if len(observations) > self.promotion_min_observations:
+                del observations[:-self.promotion_min_observations]
+            if self._can_promote_tentative(observations):
+                best_candidate_id = candidate_id
+                best_observation = observation
+                break
+
+        if not best_candidate_id or best_observation is None:
+            return None
+
+        target = self._profiles[best_candidate_id]
+        source_entity_id = profile.entity_id
+        target.merge_evidence.append({
+            "track_a": target.track_ids[-1] if target.track_ids else None,
+            "track_b": profile.track_ids[0] if profile.track_ids else None,
+            "score": best_observation["score"],
+            "promotion": "tentative_sustained_match",
+            "observations": copy.deepcopy(
+                profile.tentative_merge_observations.get(best_candidate_id, [])
+            ),
+        })
+        target.occlusion_gaps.append({
+            "from_frame": target.last_seen_frame,
+            "to_frame": profile.first_seen_frame,
+            "reason": "tentative_promoted",
+            "reid_score": best_observation["score"],
+        })
+        for track_id in profile.track_ids:
+            if track_id not in target.track_ids:
+                target.track_ids.append(track_id)
+            self._track_to_entity[track_id] = best_candidate_id
+        target.segments.extend(profile.segments)
+        target.global_trajectory.extend(profile.global_trajectory)
+        if len(target.global_trajectory) > 300:
+            del target.global_trajectory[:-300]
+        target.last_seen_frame = max(target.last_seen_frame, profile.last_seen_frame)
+        target.last_centroid = list(profile.last_centroid)
+        target.last_feature = list(profile.last_feature)
+        target.last_direction_deg = profile.last_direction_deg
+        target.tracking_quality = "occluded"
+        self._profiles.pop(source_entity_id, None)
+        self._record_debug_decision(
+            obj,
+            frame_idx,
+            "promoted_merge",
+            best_candidate_id,
+            best_observation["score"],
+            best_observation.get("factors", {}),
+            [{
+                "entity_id": best_candidate_id,
+                "latest_track_id": target.track_ids[-1] if target.track_ids else None,
+                "score": best_observation["score"],
+                "factors": best_observation.get("factors", {}),
+                "direction_score": best_observation.get("direction_score", 0.0),
+            }],
+            created_entity_id=source_entity_id,
+        )
+        return best_candidate_id
+
+    def _can_promote_tentative(self, observations: list[dict[str, Any]]) -> bool:
+        if len(observations) < self.promotion_min_observations:
+            return False
+        recent = observations[-self.promotion_min_observations:]
+        if any(item.get("score", 0.0) < self.promotion_min_score for item in recent):
+            return False
+        if any(
+            item.get("factors", {}).get("position_score", 0.0) < self.promotion_min_position_score
+            for item in recent
+        ):
+            return False
+        if any(item.get("direction_score", 0.0) < self.promotion_min_direction_score for item in recent):
+            return False
+        appearance_scores = [
+            item.get("factors", {}).get("appearance_score")
+            for item in recent
+            if item.get("factors", {}).get("appearance_score") is not None
+        ]
+        if appearance_scores and min(appearance_scores) < self.promotion_min_appearance_score:
+            return False
+        return True
 
     def _append_trajectory(self, profile: EntityProfile, obj: dict[str, Any], timestamp: float) -> None:
         trajectory = obj.get("trajectory") or []
@@ -350,6 +484,11 @@ class EntityProfileManager:
                 "tentative": self.tentative_threshold,
                 "max_merge_gap_frames": self.max_merge_gap_frames,
                 "max_position_gap_px": self.max_position_gap_px,
+                "promotion_min_observations": self.promotion_min_observations,
+                "promotion_min_score": self.promotion_min_score,
+                "promotion_min_position_score": self.promotion_min_position_score,
+                "promotion_min_direction_score": self.promotion_min_direction_score,
+                "promotion_min_appearance_score": self.promotion_min_appearance_score,
             },
             "best_factors": best_factors,
             "top_candidates": top_candidates,
