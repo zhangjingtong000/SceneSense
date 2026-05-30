@@ -70,7 +70,7 @@ def benchmark_video(args: argparse.Namespace) -> dict[str, Any]:
         with_reid=args.with_reid,
         with_gmc=not args.no_gmc,
     )
-    profiles = EntityProfileManager()
+    profiles = EntityProfileManager(enable_debug=args.entity_debug)
     metrics = TrackerMetrics()
     event_builder = EventBuilder(
         event_interval_frames=args.event_interval,
@@ -125,7 +125,7 @@ def benchmark_video(args: argparse.Namespace) -> dict[str, Any]:
     elapsed = round(time.perf_counter() - start_time, 3)
     processed_fps = round(frame_idx / elapsed, 3) if elapsed > 0 else 0.0
 
-    return to_jsonable({
+    result = {
         "schema_version": SCHEMA_VERSION,
         "run": {
             "created_at": datetime.now().isoformat(timespec="seconds"),
@@ -177,7 +177,10 @@ def benchmark_video(args: argparse.Namespace) -> dict[str, Any]:
         "events": events,
         "entities": profiles.to_entities(),
         "lifelines": profiles.to_lifelines(),
-    })
+    }
+    if args.entity_debug:
+        result["entity_debug"] = profiles.debug_summary()
+    return to_jsonable(result)
 
 
 def summarize_event(event: dict[str, Any]) -> dict[str, Any]:
@@ -280,6 +283,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--matching-threshold", type=float, default=0.65)
     parser.add_argument("--with-reid", action="store_true", help="启用 tracker 内置 ReID")
     parser.add_argument("--no-gmc", action="store_true", help="关闭相机运动补偿")
+    parser.add_argument("--entity-debug", action="store_true", help="在 JSON 中写入 Entity 融合候选评分日志")
     return parser
 
 

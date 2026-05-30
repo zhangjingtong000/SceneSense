@@ -1,5 +1,6 @@
 from scripts.benchmark_video import (
     SCHEMA_VERSION,
+    build_parser,
     format_value,
     parse_classes,
     print_summary,
@@ -85,3 +86,9 @@ def test_format_value_keeps_diff_friendly_scalars():
     assert format_value(0.5) == "0.5"
     assert format_value([0, 2]) == "0,2"
     assert format_value(None) == "all"
+
+
+def test_parser_supports_optional_entity_debug():
+    args = build_parser().parse_args(["--source", "video.mp4", "--entity-debug"])
+
+    assert args.entity_debug is True

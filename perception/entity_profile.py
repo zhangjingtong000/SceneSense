@@ -88,11 +88,22 @@ class EntityProfileManager:
         tentative_threshold: float = 0.30,
         max_merge_gap_frames: int = 150,
         max_position_gap_px: float = 140.0,
+        enable_debug: bool = False,
+        max_debug_records: int = 5000,
     ) -> None:
         self.auto_merge_threshold = auto_merge_threshold
         self.tentative_threshold = tentative_threshold
         self.max_merge_gap_frames = max_merge_gap_frames
         self.max_position_gap_px = max_position_gap_px
+        self.enable_debug = enable_debug
+        self.max_debug_records = max_debug_records
+        self.debug_records: list[dict[str, Any]] = []
+        self.debug_stats: dict[str, int] = {
+            "auto_merge": 0,
+            "tentative": 0,
+            "new_entity": 0,
+            "no_candidate": 0,
+        }
         self._profiles: dict[str, EntityProfile] = {}
         self._track_to_entity: dict[int, str] = {}
         self._next_entity_index = 1
@@ -143,9 +154,16 @@ class EntityProfileManager:
         best_entity_id = ""
         best_score = 0.0
         best_factors: dict[str, Any] = {}
+        scored_candidates: list[dict[str, Any]] = []
         for entity_id in candidate_entity_ids:
             profile = self._profiles[entity_id]
             score, factors = self._score_candidate(profile, obj, frame_idx)
+            scored_candidates.append({
+                "entity_id": entity_id,
+                "latest_track_id": profile.track_ids[-1] if profile.track_ids else None,
+                "score": round(score, 3),
+                "factors": factors,
+            })
             if score > best_score:
                 best_entity_id = entity_id
                 best_score = score
@@ -154,6 +172,15 @@ class EntityProfileManager:
         if best_entity_id and best_score >= self.auto_merge_threshold:
             self._track_to_entity[track_id] = best_entity_id
             profile = self._profiles[best_entity_id]
+            self._record_debug_decision(
+                obj,
+                frame_idx,
+                "auto_merge",
+                best_entity_id,
+                best_score,
+                best_factors,
+                scored_candidates,
+            )
             return best_entity_id, {
                 "track_a": profile.track_ids[-1] if profile.track_ids else None,
                 "track_b": track_id,
@@ -167,6 +194,27 @@ class EntityProfileManager:
         if best_entity_id and best_score >= self.tentative_threshold:
             self._profiles[entity_id].tentative_merge_candidates.append(best_entity_id)
             self._profiles[entity_id].tracking_quality = "tentative"
+            self._record_debug_decision(
+                obj,
+                frame_idx,
+                "tentative",
+                best_entity_id,
+                best_score,
+                best_factors,
+                scored_candidates,
+                created_entity_id=entity_id,
+            )
+        else:
+            self._record_debug_decision(
+                obj,
+                frame_idx,
+                "new_entity",
+                best_entity_id,
+                best_score,
+                best_factors,
+                scored_candidates,
+                created_entity_id=entity_id,
+            )
         return entity_id, None
 
     def _score_candidate(
@@ -264,3 +312,74 @@ class EntityProfileManager:
         entity_id = f"Person-{self._next_entity_index}"
         self._next_entity_index += 1
         return entity_id
+
+    def _record_debug_decision(
+        self,
+        obj: dict[str, Any],
+        frame_idx: int,
+        decision: str,
+        best_entity_id: str,
+        best_score: float,
+        best_factors: dict[str, Any],
+        scored_candidates: list[dict[str, Any]],
+        created_entity_id: str = "",
+    ) -> None:
+        if not self.enable_debug:
+            return
+
+        self.debug_stats[decision] = self.debug_stats.get(decision, 0) + 1
+        if not best_entity_id:
+            self.debug_stats["no_candidate"] = self.debug_stats.get("no_candidate", 0) + 1
+
+        top_candidates = sorted(
+            scored_candidates,
+            key=lambda item: item["score"],
+            reverse=True,
+        )[:10]
+        blocker = self._debug_blocker(decision, best_score, best_factors)
+        record = {
+            "frame_idx": frame_idx,
+            "track_id": int(obj.get("track_id", 0)),
+            "created_entity_id": created_entity_id,
+            "decision": decision,
+            "best_entity_id": best_entity_id,
+            "best_score": round(best_score, 3),
+            "blocker": blocker,
+            "thresholds": {
+                "auto_merge": self.auto_merge_threshold,
+                "tentative": self.tentative_threshold,
+                "max_merge_gap_frames": self.max_merge_gap_frames,
+                "max_position_gap_px": self.max_position_gap_px,
+            },
+            "best_factors": best_factors,
+            "top_candidates": top_candidates,
+        }
+        self.debug_records.append(record)
+        if len(self.debug_records) > self.max_debug_records:
+            del self.debug_records[: len(self.debug_records) - self.max_debug_records]
+
+    def _debug_blocker(self, decision: str, best_score: float, best_factors: dict[str, Any]) -> str:
+        if decision == "auto_merge":
+            return ""
+        if not best_factors:
+            return "no_candidate"
+        if best_factors.get("reason"):
+            return str(best_factors["reason"])
+        if best_score < self.tentative_threshold:
+            return "score_below_tentative_threshold"
+        if best_score < self.auto_merge_threshold:
+            return "score_below_auto_merge_threshold"
+        return "unknown"
+
+    def debug_summary(self) -> dict[str, Any]:
+        blockers: dict[str, int] = {}
+        for record in self.debug_records:
+            blocker = record.get("blocker") or "auto_merge"
+            blockers[blocker] = blockers.get(blocker, 0) + 1
+        return {
+            "enabled": self.enable_debug,
+            "stats": dict(self.debug_stats),
+            "blockers": blockers,
+            "record_count": len(self.debug_records),
+            "records": copy.deepcopy(self.debug_records),
+        }

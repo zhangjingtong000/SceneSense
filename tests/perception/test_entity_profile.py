@@ -191,3 +191,18 @@ def test_exports_deep_copy_nested_evidence_and_gap_data():
     profile = mgr.get_profile("Person-1")
     assert profile.merge_evidence[0]["track_b"] == 17
     assert profile.occlusion_gaps[0]["to_frame"] == 18
+
+
+def test_debug_summary_records_candidate_scores_and_blockers():
+    mgr = EntityProfileManager(enable_debug=True, auto_merge_threshold=0.99, tentative_threshold=0.3)
+    mgr.update([track(3, 10, 100, 100, [1.0, 0.0])], frame_idx=10, timestamp=10 / 30.0)
+    mgr.update([track(17, 18, 106, 102, [0.98, 0.02])], frame_idx=18, timestamp=18 / 30.0)
+
+    summary = mgr.debug_summary()
+
+    assert summary["enabled"] is True
+    assert summary["stats"]["tentative"] == 1
+    assert summary["blockers"]["score_below_auto_merge_threshold"] == 1
+    assert summary["records"][1]["track_id"] == 17
+    assert summary["records"][1]["top_candidates"][0]["entity_id"] == "Person-1"
+    assert "position_score" in summary["records"][1]["top_candidates"][0]["factors"]
