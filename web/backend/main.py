@@ -10,6 +10,7 @@ from fastapi import FastAPI, File, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
+from agents.env import get_local_env
 from .pipeline_runner import run_pipeline
 
 UPLOAD_DIR = Path(__file__).resolve().parent.parent.parent / "uploads"
@@ -88,7 +89,7 @@ async def chat(req: dict):
     from scripts.qa_repl import KGQA
     G = nx.read_graphml(str(graphml))
 
-    api_key = os.getenv("DEEPSEEK_API_KEY", "")
+    api_key = get_local_env("DEEPSEEK_API_KEY")
     llm = None
     if api_key:
         from agents.llm_client import LLMClient
