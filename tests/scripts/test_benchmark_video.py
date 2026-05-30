@@ -58,6 +58,10 @@ def test_print_summary_outputs_terminal_tables(capsys):
                 "with_reid": False,
                 "with_gmc": True,
             },
+            "entity": {
+                "auto_merge_threshold": 0.78,
+                "tentative_threshold": 0.3,
+            },
         },
         "metrics": {
             "tracker": {
@@ -89,6 +93,11 @@ def test_format_value_keeps_diff_friendly_scalars():
 
 
 def test_parser_supports_optional_entity_debug():
-    args = build_parser().parse_args(["--source", "video.mp4", "--entity-debug"])
+    args = build_parser().parse_args([
+        "--source", "video.mp4",
+        "--entity-debug",
+        "--entity-auto-threshold", "0.72",
+    ])
 
     assert args.entity_debug is True
+    assert args.entity_auto_threshold == 0.72
