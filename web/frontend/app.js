@@ -72,15 +72,42 @@ document.getElementById('setAutoMerge').oninput=function(){document.getElementBy
 document.getElementById('setTentative').oninput=function(){document.getElementById('setTentativeVal').textContent=this.value;};
 
 // Upload (shared between home and nav)
+function resetWorkspace(){
+  if(ws){ws.close();ws=null;}
+  stopPlay();
+  videoId=null;
+  events=[];entities=[];lifelines=[];kgGraph={nodes:[],edges:[]};
+  personMap={};frameBboxes={};framePersons={};poseCache={};
+  skeletonEnabled=false;skeletonDataReady=false;updateSkeletonButton();
+  selectedPerson=null;selectedEntity=null;framePrefix='';playingFrame=0;playbackRange=null;latestLiveFrame=-1;
+  frameRequestToken++;
+  latestCanvasImage=null;latestCanvasSnap={};
+  canvasSized=false;
+  canvas.style.display='none';highlightCanvas.style.display='none';
+  document.getElementById('overlay').style.display='';
+  document.getElementById('playerControls').style.display='none';
+  document.getElementById('progressWrap').style.display='none';
+  document.getElementById('videoPlayer').style.display='none';
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+  highlightCtx.clearRect(0,0,highlightCanvas.width,highlightCanvas.height);
+  redrawSelectedHighlight();
+  renderTimeline();renderLifelines();renderEntities();renderEvents();renderEvidence();
+  document.getElementById('chatMsgs').innerHTML='';
+  resetAgentView();resetAgentDots();
+}
 function startUpload(file){
-  const fd=new FormData();fd.append('file',file);
+  resetWorkspace();
   setStatus('loading','上传中...');
+  location.hash='workspace';
+  const fd=new FormData();fd.append('file',file);
   fetch('/upload',{method:'POST',body:fd}).then(r=>r.json()).then(d=>{
     videoId=d.video_id;
     setStatus('loading','分析中...');
-    location.hash='workspace';
-    setupWorkspace();
-  }).catch(e=>setStatus('error','上传失败'));
+    document.getElementById('overlay').style.display='none';
+    canvas.style.display='';highlightCanvas.style.display='';
+    document.getElementById('progressWrap').style.display='';
+    connectWS();
+  }).catch(e=>{setStatus('error','上传失败');resetWorkspace();});
 }
 function setupWorkspace(){
   document.getElementById('overlay').style.display='none';
