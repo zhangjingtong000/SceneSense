@@ -955,9 +955,11 @@ function hidePersonCard(){document.getElementById('personCard').style.display='n
 
 // Helpers
 function setStatus(st,text){
-  const dot=document.getElementById('statusDot');
-  dot.className='status-dot '+st;
-  document.getElementById('statusText').textContent=text;
+  const el=document.querySelector('.nav-status');
+  if(!el)return;
+  const dot=el.querySelector('.dot');
+  if(dot){dot.style.background=st==='loading'?'var(--blue)':st==='error'?'var(--red)':'var(--green)';}
+  el.childNodes[1]&&(el.childNodes[1].textContent=text);
 }
 function entityIndex(id){const m=String(id||'').match(/\d+/);return m?parseInt(m[0],10):9999;}
 function entityColor(id){return ENTITY_COLORS[entityIndex(id)%ENTITY_COLORS.length];}

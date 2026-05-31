@@ -9,15 +9,14 @@
 <body>
 
 <nav class="top-nav" id="topNav">
-  <a class="brand" href="#home">Scene<span>Sense</span></a>
+  <a class="brand" href="#home"><div class="brand-icon">SS</div>SceneSense<span>Workbench</span></a>
   <div class="nav-links">
     <a href="#home" class="nav-link" data-page="home">首页</a>
     <a href="#workspace" class="nav-link" data-page="workspace">工作台</a>
     <a href="#settings" class="nav-link" data-page="settings">设置</a>
   </div>
   <div class="nav-right">
-    <span class="status-dot" id="statusDot"></span>
-    <span class="status-text" id="statusText">就绪</span>
+    <div class="nav-status"><span class="dot"></span>系统就绪</div>
     <input type="file" id="fileInput" accept="video/*,.mp4,.avi,.mkv">
     <button class="upload-btn" id="uploadBtn">上传视频</button>
   </div>
@@ -26,41 +25,38 @@
 <!-- HOME -->
 <div class="page" id="page-home">
   <div class="home-hero">
-    <div class="hero-logo">SS</div>
-    <h1>SceneSense</h1>
-    <p class="hero-sub">多 Agent 协作场景理解，连续实体档案 + 知识图谱推理</p>
-    <div class="hero-upload">
-      <button class="upload-btn large" id="homeUploadBtn">选择视频开始分析</button>
-      <span class="hero-hint">支持 mp4 / avi / mkv，建议 2-5 分钟片段</span>
+    <div class="home-badge">SceneSense v2.0</div>
+    <h1>多 Agent 视频场景理解工作台</h1>
+    <p class="hero-sub">从实时 YOLO 检测到深度实体推理，为您提供全方位的视频解析与结构化洞察。</p>
+    <div class="hero-upload-zone" id="homeUploadBtn">
+      <div class="upload-zone-icon">
+        <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+      </div>
+      <span class="upload-zone-title">选择视频开始分析</span>
+      <span class="upload-zone-hint">支持 MP4, MOV, AVI (最大 2GB)</span>
     </div>
   </div>
-  <div class="home-flow">
-    <div class="flow-step">
-      <div class="flow-num">1</div>
-      <b>上传视频</b>
-      <span>拖拽或点击上传，支持常见视频格式</span>
+  <div class="home-features">
+    <div class="feature-card">
+      <div class="feature-icon" style="background:#EBF0FF;color:#2563EB"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg></div>
+      <h3>1. 上传视频</h3>
+      <p>导入原始视频素材，系统将自动进行预处理与分片。</p>
     </div>
-    <div class="flow-arrow">→</div>
-    <div class="flow-step">
-      <div class="flow-num">2</div>
-      <b>自动分析</b>
-      <span>YOLO 检测 → 轨迹跟踪 → Entity 融合 → 多 Agent 推理</span>
+    <div class="feature-card">
+      <div class="feature-icon" style="background:#EEF2FF;color:#4F46E5"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg></div>
+      <h3>2. 自动分析</h3>
+      <p>YOLO 检测、实体跟踪与多 Agent 协同推理，构建结构化知识。</p>
     </div>
-    <div class="flow-arrow">→</div>
-    <div class="flow-step">
-      <div class="flow-num">3</div>
-      <b>交互审查</b>
-      <span>时间轴定位、KG 证据子图、行为推理路径</span>
+    <div class="feature-card">
+      <div class="feature-icon" style="background:#ECFDF5;color:#059669"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 11-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg></div>
+      <h3>3. 交互审查</h3>
+      <p>在交互式工作台中审查实体轨迹、事件及 KG 图谱，确认分析结果。</p>
     </div>
-  </div>
-  <div class="home-recent" id="homeRecent" style="display:none" data-page-init>
-    <h3>最近分析</h3>
-    <div id="recentList"></div>
   </div>
   <div class="home-shortcuts">
     <div class="shortcut-row">
-      <kbd>←</kbd><kbd>→</kbd> 逐帧步进 &nbsp;
       <kbd>Space</kbd> 播放/暂停 &nbsp;
+      <kbd>←</kbd><kbd>→</kbd> 逐帧步进 &nbsp;
       <kbd>Esc</kbd> 取消选择
     </div>
   </div>
@@ -147,65 +143,75 @@
 <!-- SETTINGS -->
 <div class="page" id="page-settings">
   <div class="settings-container">
-    <h2>设置</h2>
+    <div class="settings-header">
+      <div>
+        <h2>参数配置</h2>
+        <p class="muted">调整底层分析引擎的检测、跟踪与融合策略</p>
+      </div>
+      <div class="settings-actions">
+        <button class="reset-btn" onclick="resetSettings()">恢复默认</button>
+        <button class="upload-btn" onclick="saveSettings()">保存设置</button>
+      </div>
+    </div>
     <div class="settings-group">
       <h3>检测参数</h3>
-      <div class="setting-row">
-        <label>置信度阈值 (conf)<br><small>越低检出越多但噪声增大。小目标场景建议 0.08-0.15，干净场景 0.2-0.3。</small></label>
-        <input type="range" min="0.05" max="0.5" step="0.01" value="0.15" id="setConf">
-        <span class="set-val" id="setConfVal">0.15</span>
-      </div>
-      <div class="setting-row">
-        <label>输入尺寸 (imgsz)<br><small>越大越能检出小目标，但更吃显存。小人物场景建议 ≥960，性能优先用 640。</small></label>
-        <select id="setImgsz">
-          <option value="480">480</option>
-          <option value="640">640</option>
-          <option value="960" selected>960</option>
-          <option value="1280">1280</option>
-        </select>
-      </div>
-      <div class="setting-row">
-        <label>目标类别<br><small>0=仅行人，留空或设为其他 COCO 类别 ID 可检测更多类型。</small></label>
-        <input type="number" min="0" max="80" value="0" id="setClasses">
+      <div class="settings-grid">
+        <div class="setting-item">
+          <label>置信度阈值</label>
+          <p class="setting-desc">过滤检测框的最小概率分数，推荐 0.15-0.45</p>
+          <div class="setting-control"><input type="range" min="0.05" max="0.5" step="0.01" value="0.15" id="setConf"><span class="set-val" id="setConfVal">0.15</span></div>
+        </div>
+        <div class="setting-item">
+          <label>输入尺寸</label>
+          <p class="setting-desc">模型推理分辨率，更高提升远距离检测但降低速度</p>
+          <div class="setting-control"><select id="setImgsz"><option value="480">480 px</option><option value="640">640 px</option><option value="960" selected>960 px</option><option value="1280">1280 px</option></select></div>
+        </div>
+        <div class="setting-item">
+          <label>目标类别</label>
+          <p class="setting-desc">需要检测的类别索引，0=仅行人</p>
+          <div class="setting-control"><input type="number" min="0" max="80" value="0" id="setClasses"></div>
+        </div>
       </div>
     </div>
     <div class="settings-group">
       <h3>跟踪参数</h3>
-      <div class="setting-row">
-        <label>遮挡容忍帧数 (lost_buffer)<br><small>目标消失后保留的帧数。密集遮挡场景建议 90-150，固定机位可更高。</small></label>
-        <input type="range" min="30" max="300" step="10" value="120" id="setLostBuffer">
-        <span class="set-val" id="setLostBufferVal">120</span>
-      </div>
-      <div class="setting-row">
-        <label>匹配阈值<br><small>检测框与跟踪框匹配的 IoU 下限。越低越激进（易错配），越高越保守。推荐 0.55-0.70。</small></label>
-        <input type="range" min="0.3" max="0.9" step="0.01" value="0.65" id="setMatchThresh">
-        <span class="set-val" id="setMatchThreshVal">0.65</span>
-      </div>
-      <div class="setting-row">
-        <label>ReID 外观特征<br><small>开启后利用 ResNet18 特征做外观匹配，有助于遮挡后重识别。GPU 推理，会增加延迟。</small></label>
-        <input type="checkbox" id="setReid">
-      </div>
-      <div class="setting-row">
-        <label>GMC 全局运动补偿<br><small>补偿相机运动（平移/旋转/缩放）。固定监控相机建议关闭以节省 CPU，移动相机必须开启。</small></label>
-        <input type="checkbox" id="setGmc" checked>
+      <div class="settings-grid">
+        <div class="setting-item">
+          <label>遮挡容忍帧数</label>
+          <p class="setting-desc">目标消失后保留 ID 的最大帧数，推荐 30-300</p>
+          <div class="setting-control"><input type="range" min="30" max="300" step="10" value="120" id="setLostBuffer"><span class="set-val" id="setLostBufferVal">120</span></div>
+        </div>
+        <div class="setting-item">
+          <label>匹配阈值</label>
+          <p class="setting-desc">帧间目标关联的 IoU 阈值，推荐 0.3-0.7</p>
+          <div class="setting-control"><input type="range" min="0.3" max="0.9" step="0.01" value="0.65" id="setMatchThresh"><span class="set-val" id="setMatchThreshVal">0.65</span></div>
+        </div>
+        <div class="setting-item">
+          <label>ReID 外观特征</label>
+          <p class="setting-desc">启用特征重识别模型，复杂遮挡下保持 ID 稳定</p>
+          <div class="setting-control"><input type="checkbox" id="setReid"></div>
+        </div>
+        <div class="setting-item">
+          <label>GMC 运动补偿</label>
+          <p class="setting-desc">补偿相机平移/旋转/缩放，固定机位建议关闭</p>
+          <div class="setting-control"><input type="checkbox" id="setGmc" checked></div>
+        </div>
       </div>
     </div>
     <div class="settings-group">
       <h3>Entity 融合</h3>
-      <div class="setting-row">
-        <label>自动合并阈值<br><small>新 track 与已有 Person 匹配置信度达到此值自动合并。越高越保守，越低越易误合并。推荐 0.68-0.78。</small></label>
-        <input type="range" min="0.5" max="0.95" step="0.01" value="0.72" id="setAutoMerge">
-        <span class="set-val" id="setAutoMergeVal">0.72</span>
+      <div class="settings-grid">
+        <div class="setting-item">
+          <label>自动合并阈值</label>
+          <p class="setting-desc">时空重叠率高于此值自动合并实体，推荐 0.68-0.78</p>
+          <div class="setting-control"><input type="range" min="0.5" max="0.95" step="0.01" value="0.72" id="setAutoMerge"><span class="set-val" id="setAutoMergeVal">0.72</span></div>
+        </div>
+        <div class="setting-item">
+          <label>暂定候选阈值</label>
+          <p class="setting-desc">此范围内提示人工确认，推荐 0.2-0.7</p>
+          <div class="setting-control"><input type="range" min="0.2" max="0.7" step="0.01" value="0.30" id="setTentative"><span class="set-val" id="setTentativeVal">0.30</span></div>
+        </div>
       </div>
-      <div class="setting-row">
-        <label>暂定候选阈值<br><small>低于自动合并阈值但高于此值的 track 标记为「待确认」。推荐为自动合并阈值的 40-50%。</small></label>
-        <input type="range" min="0.2" max="0.7" step="0.01" value="0.30" id="setTentative">
-        <span class="set-val" id="setTentativeVal">0.30</span>
-      </div>
-    </div>
-    <div class="settings-actions">
-      <button class="upload-btn" onclick="saveSettings()">保存设置</button>
-      <button class="reset-btn" onclick="resetSettings()">恢复默认</button>
     </div>
   </div>
 </div>
