@@ -19,7 +19,7 @@
   <div class="video-col" id="videoCol">
     <div class="viewer">
       <div class="overlay" id="overlay">
-        <div class="empty-state"><div class="mark">SS</div><div>上传视频后开始连续实体分析</div></div>
+        <div class="empty-state"><div class="mark">SS</div><div>上传视频开始分析</div><div style="font-size:11px;color:var(--muted);margin-top:6px">支持 mp4/avi/mkv，建议 2-5 分钟片段。<br>上传后自动检测、跟踪、构建实体档案和 KG 证据链。</div></div>
       </div>
       <canvas id="canvas" style="display:none;position:absolute;inset:0;width:100%;height:100%;object-fit:contain"></canvas>
       <canvas id="highlightCanvas" style="display:none;position:absolute;inset:0;width:100%;height:100%;object-fit:contain;pointer-events:none"></canvas>
@@ -40,10 +40,10 @@
       </div>
     </div>
     <div class="timeline-wrap">
-      <div class="timeline-title"><b>事件热力</b><span>点击热区定位片段</span></div>
-      <div class="event-heat" id="timelineBar"><div class="panel-empty" style="padding:9px 10px">等待事件生成</div></div>
+      <div class="timeline-title"><b>事件热力</b><span>每 N 帧一个分析窗口</span></div>
+      <div class="event-heat" id="timelineBar"><div class="panel-empty" style="padding:9px 10px">上传视频后自动生成事件片段</div></div>
       <div class="timeline-title"><b>实体生命线</b><span id="frameScaleLabel">统一帧号基准</span></div>
-      <div class="lifeline-pane" id="lifelinePane"><div class="panel-empty">等待稳定实体 ID</div></div>
+      <div class="lifeline-pane" id="lifelinePane"><div class="panel-empty">检测到人物后显示连续轨迹段</div></div>
     </div>
   </div>
 
@@ -57,13 +57,14 @@
     </div>
     <div class="entity-panel tab-view active" id="entityPanel" data-tab-view="entities">
       <div class="panel-head"><h3>实体档案</h3><span id="entityCountText">0 个实体</span></div>
+      <input type="text" id="entitySearch" placeholder="搜索实体..." oninput="filterEntities(this.value)" style="display:none;width:100%;padding:6px 10px;margin:0 0 8px;background:var(--bg);border:1px solid var(--border);color:var(--text);border-radius:6px;font-size:12px;outline:none">
       <div class="agent-panel" id="agentPanel"></div>
-      <div class="entity-list" id="entityList"><div class="panel-empty">上传视频后显示 Person 生命线</div></div>
+      <div class="entity-list" id="entityList"><div class="panel-empty">上传视频后显示 Person 档案<br><span style="font-size:11px">点击行可查看完整轨迹和 KG 证据</span></div></div>
     </div>
     <div class="resize-v" id="resizeAgent"></div>
     <div class="event-panel tab-view" id="eventPanel" data-tab-view="events">
       <div class="panel-head"><h3>事件列表</h3><span id="eventCountText">0 个事件</span></div>
-      <div id="eventList"><div class="panel-empty">等待事件生成</div></div>
+      <div id="eventList"><div class="panel-empty">分析开始后按时间顺序显示事件</div></div>
     </div>
     <div class="evidence-panel tab-view" id="evidencePanel" data-tab-view="kg">
       <div class="panel-head"><h3>KG 证据子图</h3><span id="kgCountText">0 节点 / 0 边</span></div>
@@ -74,7 +75,7 @@
         <button data-filter="next" onclick="setKGFilter('next')">时序</button>
       </div>
       <div class="kg-graph"><canvas id="kgCanvas"></canvas></div>
-      <div id="kgEvidence"><div class="panel-empty">选择一个实体查看 1-2 跳证据链</div></div>
+      <div id="kgEvidence"><div class="panel-empty">点击左侧实体行查看关联证据<br><span style="font-size:11px">显示事件归属、人物交互、行为匹配路径</span></div></div>
     </div>
     <div class="chat-panel tab-view" id="chatPanel" data-tab-view="logs">
       <div class="chat-msgs" id="chatMsgs">
@@ -88,6 +89,6 @@
   </div>
 </div>
 
-<script src="app.js"></script>
+<script src="/static/app.js"></script>
 </body>
 </html>
