@@ -984,6 +984,30 @@ function escapeHtml(s){
     const onUp=()=>{document.getElementById('resizeAgent').classList.remove('active');document.removeEventListener('mousemove',onMove);document.removeEventListener('mouseup',onUp);localStorage.setItem('scenesense:entityH',ep.offsetHeight);};
     document.addEventListener('mousemove',onMove);document.addEventListener('mouseup',onUp);
   });
+
+  // Video ↔ Timeline resize
+  const tw=document.getElementById('timelineWrap');
+  if(tw)tw.style.flexBasis=localStorage.getItem('scenesense:timelineH')||'';
+  const rvt=document.getElementById('resizeVTimeline');
+  if(rvt){rvt.addEventListener('mousedown',e=>{
+    e.preventDefault();rvt.classList.add('active');
+    const sy=e.clientY,sh=tw.offsetHeight;
+    const onMove=ev=>{const h=Math.max(120,Math.min(window.innerHeight*.5,sh+sy-ev.clientY));tw.style.flexBasis=h+'px';};
+    const onUp=()=>{rvt.classList.remove('active');document.removeEventListener('mousemove',onMove);document.removeEventListener('mouseup',onUp);localStorage.setItem('scenesense:timelineH',tw.style.flexBasis);};
+    document.addEventListener('mousemove',onMove);document.addEventListener('mouseup',onUp);
+  });}
+
+  // KG ↔ Evidence text resize
+  const kep=document.querySelector('.kg-evidence-panel');
+  if(kep)kep.style.flexBasis=localStorage.getItem('scenesense:kgEvidenceH')||'';
+  const rvkg=document.getElementById('resizeVKG');
+  if(rvkg){rvkg.addEventListener('mousedown',e=>{
+    e.preventDefault();rvkg.classList.add('active');
+    const sy=e.clientY,sh=kep.offsetHeight;
+    const onMove=ev=>{const h=Math.max(60,Math.min(400,sh+sy-ev.clientY));kep.style.flexBasis=h+'px';requestAnimationFrame(renderEvidence);};
+    const onUp=()=>{rvkg.classList.remove('active');document.removeEventListener('mousemove',onMove);document.removeEventListener('mouseup',onUp);localStorage.setItem('scenesense:kgEvidenceH',kep.style.flexBasis);};
+    document.addEventListener('mousemove',onMove);document.addEventListener('mouseup',onUp);
+  });}
 })();
 
 // Keyboard shortcuts

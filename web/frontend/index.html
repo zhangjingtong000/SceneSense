@@ -92,7 +92,8 @@
           <div id="personContent"></div>
         </div>
       </div>
-      <div class="timeline-wrap">
+      <div class="resize-v" id="resizeVTimeline"></div>
+      <div class="timeline-wrap" id="timelineWrap">
         <div class="timeline-title"><b>事件热力</b><span>每 N 帧一个分析窗口</span></div>
         <div class="event-heat" id="timelineBar"><div class="panel-empty" style="padding:9px 10px">上传视频后自动生成事件片段</div></div>
         <div class="timeline-title"><b>实体生命线</b><span id="frameScaleLabel">统一帧号基准</span></div>
@@ -127,7 +128,8 @@
           <button data-filter="next" onclick="setKGFilter('next')">时序</button>
         </div>
         <div class="kg-graph"><canvas id="kgCanvas"></canvas></div>
-        <div id="kgEvidence"><div class="panel-empty">点击左侧实体行查看关联证据<br><span style="font-size:11px">显示事件归属、人物交互、行为匹配路径</span></div></div>
+        <div class="resize-v" id="resizeVKG"></div>
+        <div id="kgEvidence" class="kg-evidence-panel"><div class="panel-empty">点击左侧实体行查看关联证据<br><span style="font-size:11px">显示事件归属、人物交互、行为匹配路径</span></div></div>
       </div>
       <div class="chat-panel tab-view" id="chatPanel" data-tab-view="logs">
         <div class="chat-msgs" id="chatMsgs">
