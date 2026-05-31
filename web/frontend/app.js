@@ -453,7 +453,9 @@ function renderEntities(){
       </div>
       ${tentative?`<div class="entity-merge"><span>待确认合并: ${escapeHtml(tentative)}</span><button>确认</button></div>`:''}`;
     const highlightBtn=item.querySelector('.highlight-only-btn');
-    highlightBtn.onclick=e=>toggleEntityHighlightOnly(e,ent.entity_id);
+    if(highlightBtn)highlightBtn.onclick=e=>toggleEntityHighlightOnly(e,ent.entity_id);
+    const mergeBtn=item.querySelector('.entity-merge button');
+    if(mergeBtn)mergeBtn.onclick=e=>{e.stopPropagation();confirmMerge(ent.entity_id,tentative);};
     list.appendChild(item);
   });
 }
@@ -474,6 +476,14 @@ function playEntityRange(entityId){
 function toggleEntityHighlightOnly(e,entityId){
   e.stopPropagation();
   toggleEntityHighlight(entityId);
+}
+function confirmMerge(entityId,predecessorId){
+  if(!predecessorId)return;
+  fetch('/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({video_id:videoId,question:`__merge__ ${predecessorId} ${entityId}`})});
+  addChatMsg('agent',`已提交合并请求：${escapeHtml(entityId)} → ${escapeHtml(predecessorId)}。将在下一次分析中生效。`);
+  const ent=entities.find(e=>e.entity_id===entityId);
+  if(ent){ent.tentative_merge_candidates=[];ent.tracking_quality='stable';}
+  renderEntities();renderLifelines();
 }
 function selectEntity(entityId,jump=true){
   if(jump){playEntityRange(entityId);return;}
@@ -537,7 +547,7 @@ function renderKGGraph(nodes, edges){
   const graphNodeIds=new Set(graphNodes.map(n=>n.node_id));
   const graphEdges=(edges||[]).filter(e=>graphNodeIds.has(e.src)&&graphNodeIds.has(e.tgt)).slice(0,36);
   if(!graphNodes.length){
-    g.fillStyle='#9aa3af';g.font='12px Microsoft YaHei, sans-serif';g.fillText('暂无图数据',ox+16,oy+28);
+    g.fillStyle='#717182';g.font='12px Microsoft YaHei, sans-serif';g.fillText('暂无图数据',ox+16,oy+28);
     return;
   }
 
@@ -580,15 +590,15 @@ function renderKGGraph(nodes, edges){
     g.beginPath();
     g.fillStyle=selected?'#f0a040':nodeColor(node.node_type);
     g.arc(p.x,p.y,selected?nodeR+2:nodeR,0,Math.PI*2);g.fill();
-    g.strokeStyle=selected?'#fff':'#20242c';g.lineWidth=selected?2.5:1.5;g.stroke();
-    g.fillStyle='#e8ebf0';g.font='11px Microsoft YaHei, sans-serif';g.textAlign='center';
+    g.strokeStyle=selected?'#007BFF':'#DEE2E6';g.lineWidth=selected?2.5:1.5;g.stroke();
+    g.fillStyle='#1a1a2e';g.font='bold 11px Microsoft YaHei, sans-serif';g.textAlign='center';
     g.fillText(shortNodeLabel(node.node_id),p.x,Math.min(oy+side-6,p.y+nodeR+16));
   });
 
   // Zoom hint
   if(kgZoom>1.01||kgZoom<0.99){
     g.fillStyle='rgba(255,255,255,.06)';g.fillRect(ox+side-44,oy+4,40,18);
-    g.fillStyle='#9aa3af';g.font='10px system-ui';g.textAlign='right';
+    g.fillStyle='#717182';g.font='10px system-ui';g.textAlign='right';
     g.fillText(Math.round(kgZoom*100)+'%',ox+side-10,oy+16);
   }
 }

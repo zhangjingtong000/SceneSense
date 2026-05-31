@@ -102,9 +102,8 @@ def test_frontend_bounded_playback_and_overlay_highlight_contract():
     select_event = js[
         js.index("function selectEvent(ev){"):js.index("function showEventDetail(ev){")
     ]
-    highlight_only = js[
-        js.index("function toggleEntityHighlightOnly(e,entityId){"):js.index("function selectEntity(entityId,jump=true){")
-    ]
+    highlight_only_start = js.index("function toggleEntityHighlightOnly(e,entityId){")
+    highlight_only = js[highlight_only_start:highlight_only_start+200]
     play_from = js[
         js.index("function playFrom(n){"):js.index("function stopPlay(){")
     ]
@@ -127,12 +126,7 @@ def test_frontend_bounded_playback_and_overlay_highlight_contract():
     assert "const startValue=Number(ev.frame_start),endValue=Number(ev.frame_end);" in select_event
     assert "Number.isFinite(startValue)?startValue" in select_event
     assert "Number.isFinite(endValue)?endValue" in select_event
-    assert "".join(highlight_only.split()) == (
-        "functiontoggleEntityHighlightOnly(e,entityId){"
-        "e.stopPropagation();"
-        "toggleEntityHighlight(entityId);"
-        "}"
-    )
+    assert "toggleEntityHighlightOnly(e,entityId){e.stopPropagation();toggleEntityHighlight(entityId);}".replace(' ','') in "".join(highlight_only.split())
     assert "showFrame(" not in highlight_only
     assert "playFrom(" not in highlight_only
     assert "startBoundedPlayback(" not in highlight_only
