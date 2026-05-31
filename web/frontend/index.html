@@ -7,84 +7,203 @@
 <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
-<header>
-  <div class="logo">Scene<span>Sense</span></div>
-  <input type="file" id="fileInput" accept="video/*,.mp4,.avi,.mkv">
-  <button class="upload-btn" id="uploadBtn">上传视频</button>
-  <div class="status-dot" id="statusDot"></div>
-  <span class="status-text" id="statusText">就绪</span>
-</header>
 
-<div class="main">
-  <div class="video-col" id="videoCol">
-    <div class="viewer">
-      <div class="overlay" id="overlay">
-        <div class="empty-state"><div class="mark">SS</div><div>上传视频开始分析</div><div style="font-size:11px;color:var(--muted);margin-top:6px">支持 mp4/avi/mkv，建议 2-5 分钟片段。<br>上传后自动检测、跟踪、构建实体档案和 KG 证据链。</div></div>
-      </div>
-      <canvas id="canvas" style="display:none;position:absolute;inset:0;width:100%;height:100%;object-fit:contain"></canvas>
-      <canvas id="highlightCanvas" style="display:none;position:absolute;inset:0;width:100%;height:100%;object-fit:contain;pointer-events:none"></canvas>
-      <video id="videoPlayer" style="position:absolute;inset:0;width:100%;height:100%;object-fit:contain;display:none" controls></video>
-      <div class="player-controls" id="playerControls">
-        <button class="primary" id="playBtn" onclick="togglePlayback()">播放</button>
-        <button onclick="stopPlay()">暂停</button>
-        <button id="skeletonBtn" onclick="toggleSkeleton()" disabled>骨架</button>
-        <input type="range" id="scrubBar" min="0" value="0" oninput="showFrame(parseInt(this.value))">
-      </div>
-      <div class="progress-wrap" id="progressWrap" style="display:none">
-        <div class="pct" id="pctText">0%</div>
-        <div class="bar"><div class="fill" id="pctFill"></div></div>
-      </div>
-      <div class="person-card" id="personCard">
-        <span class="close" onclick="hidePersonCard()">x</span>
-        <div id="personContent"></div>
-      </div>
-    </div>
-    <div class="timeline-wrap">
-      <div class="timeline-title"><b>事件热力</b><span>每 N 帧一个分析窗口</span></div>
-      <div class="event-heat" id="timelineBar"><div class="panel-empty" style="padding:9px 10px">上传视频后自动生成事件片段</div></div>
-      <div class="timeline-title"><b>实体生命线</b><span id="frameScaleLabel">统一帧号基准</span></div>
-      <div class="lifeline-pane" id="lifelinePane"><div class="panel-empty">检测到人物后显示连续轨迹段</div></div>
+<nav class="top-nav" id="topNav">
+  <a class="brand" href="#home">Scene<span>Sense</span></a>
+  <div class="nav-links">
+    <a href="#home" class="nav-link" data-page="home">首页</a>
+    <a href="#workspace" class="nav-link" data-page="workspace">工作台</a>
+    <a href="#settings" class="nav-link" data-page="settings">设置</a>
+  </div>
+  <div class="nav-right">
+    <span class="status-dot" id="statusDot"></span>
+    <span class="status-text" id="statusText">就绪</span>
+    <input type="file" id="fileInput" accept="video/*,.mp4,.avi,.mkv">
+    <button class="upload-btn" id="uploadBtn">上传视频</button>
+  </div>
+</nav>
+
+<!-- HOME -->
+<div class="page" id="page-home">
+  <div class="home-hero">
+    <div class="hero-logo">SS</div>
+    <h1>SceneSense</h1>
+    <p class="hero-sub">多 Agent 协作场景理解，连续实体档案 + 知识图谱推理</p>
+    <div class="hero-upload">
+      <button class="upload-btn large" id="homeUploadBtn">选择视频开始分析</button>
+      <span class="hero-hint">支持 mp4 / avi / mkv，建议 2-5 分钟片段</span>
     </div>
   </div>
+  <div class="home-flow">
+    <div class="flow-step">
+      <div class="flow-num">1</div>
+      <b>上传视频</b>
+      <span>拖拽或点击上传，支持常见视频格式</span>
+    </div>
+    <div class="flow-arrow">→</div>
+    <div class="flow-step">
+      <div class="flow-num">2</div>
+      <b>自动分析</b>
+      <span>YOLO 检测 → 轨迹跟踪 → Entity 融合 → 多 Agent 推理</span>
+    </div>
+    <div class="flow-arrow">→</div>
+    <div class="flow-step">
+      <div class="flow-num">3</div>
+      <b>交互审查</b>
+      <span>时间轴定位、KG 证据子图、行为推理路径</span>
+    </div>
+  </div>
+  <div class="home-recent" id="homeRecent" style="display:none">
+    <h3>最近分析</h3>
+    <div id="recentList"></div>
+  </div>
+  <div class="home-shortcuts">
+    <div class="shortcut-row">
+      <kbd>←</kbd><kbd>→</kbd> 逐帧步进 &nbsp;
+      <kbd>Space</kbd> 播放/暂停 &nbsp;
+      <kbd>Esc</kbd> 取消选择
+    </div>
+  </div>
+</div>
 
-  <div class="resize-h" id="resizeMain"></div>
-  <div class="right-panel tabbed" id="rightPanel">
-    <div class="panel-tabs" id="rightTabs">
-      <button class="active" data-tab="entities" onclick="setRightTab('entities')">实体</button>
-      <button data-tab="events" onclick="setRightTab('events')">事件</button>
-      <button data-tab="kg" onclick="setRightTab('kg')">KG</button>
-      <button data-tab="logs" onclick="setRightTab('logs')">日志</button>
-    </div>
-    <div class="entity-panel tab-view active" id="entityPanel" data-tab-view="entities">
-      <div class="panel-head"><h3>实体档案</h3><span id="entityCountText">0 个实体</span></div>
-      <input type="text" id="entitySearch" placeholder="搜索实体..." oninput="filterEntities(this.value)" style="display:none;width:100%;padding:6px 10px;margin:0 0 8px;background:var(--bg);border:1px solid var(--border);color:var(--text);border-radius:6px;font-size:12px;outline:none">
-      <div class="agent-panel" id="agentPanel"></div>
-      <div class="entity-list" id="entityList"><div class="panel-empty">上传视频后显示 Person 档案<br><span style="font-size:11px">点击行可查看完整轨迹和 KG 证据</span></div></div>
-    </div>
-    <div class="resize-v" id="resizeAgent"></div>
-    <div class="event-panel tab-view" id="eventPanel" data-tab-view="events">
-      <div class="panel-head"><h3>事件列表</h3><span id="eventCountText">0 个事件</span></div>
-      <div id="eventList"><div class="panel-empty">分析开始后按时间顺序显示事件</div></div>
-    </div>
-    <div class="evidence-panel tab-view" id="evidencePanel" data-tab-view="kg">
-      <div class="panel-head"><h3>KG 证据子图</h3><span id="kgCountText">0 节点 / 0 边</span></div>
-      <div class="filter-row" id="kgFilters">
-        <button data-filter="all" class="active" onclick="setKGFilter('all')">全部</button>
-        <button data-filter="interacts_with" onclick="setKGFilter('interacts_with')">交互</button>
-        <button data-filter="belongs_to" onclick="setKGFilter('belongs_to')">归属</button>
-        <button data-filter="next" onclick="setKGFilter('next')">时序</button>
+<!-- WORKSPACE -->
+<div class="page" id="page-workspace" style="display:none">
+  <div class="main">
+    <div class="video-col" id="videoCol">
+      <div class="viewer">
+        <div class="overlay" id="overlay">
+          <div class="empty-state"><div class="mark">SS</div><div>分析进行中</div><div style="font-size:11px;color:var(--muted);margin-top:6px">可在上方导航切换回首页查看使用指南</div></div>
+        </div>
+        <canvas id="canvas" style="display:none;position:absolute;inset:0;width:100%;height:100%;object-fit:contain"></canvas>
+        <canvas id="highlightCanvas" style="display:none;position:absolute;inset:0;width:100%;height:100%;object-fit:contain;pointer-events:none"></canvas>
+        <video id="videoPlayer" style="position:absolute;inset:0;width:100%;height:100%;object-fit:contain;display:none" controls></video>
+        <div class="player-controls" id="playerControls">
+          <button class="primary" id="playBtn" onclick="togglePlayback()">播放</button>
+          <button onclick="stopPlay()">暂停</button>
+          <button id="skeletonBtn" onclick="toggleSkeleton()" disabled>骨架</button>
+          <input type="range" id="scrubBar" min="0" value="0" oninput="showFrame(parseInt(this.value))">
+        </div>
+        <div class="progress-wrap" id="progressWrap" style="display:none">
+          <div class="pct" id="pctText">0%</div>
+          <div class="bar"><div class="fill" id="pctFill"></div></div>
+        </div>
+        <div class="person-card" id="personCard">
+          <span class="close" onclick="hidePersonCard()">x</span>
+          <div id="personContent"></div>
+        </div>
       </div>
-      <div class="kg-graph"><canvas id="kgCanvas"></canvas></div>
-      <div id="kgEvidence"><div class="panel-empty">点击左侧实体行查看关联证据<br><span style="font-size:11px">显示事件归属、人物交互、行为匹配路径</span></div></div>
+      <div class="timeline-wrap">
+        <div class="timeline-title"><b>事件热力</b><span>每 N 帧一个分析窗口</span></div>
+        <div class="event-heat" id="timelineBar"><div class="panel-empty" style="padding:9px 10px">上传视频后自动生成事件片段</div></div>
+        <div class="timeline-title"><b>实体生命线</b><span id="frameScaleLabel">统一帧号基准</span></div>
+        <div class="lifeline-pane" id="lifelinePane"><div class="panel-empty">检测到人物后显示连续轨迹段</div></div>
+      </div>
     </div>
-    <div class="chat-panel tab-view" id="chatPanel" data-tab-view="logs">
-      <div class="chat-msgs" id="chatMsgs">
-        <div class="chat-msg agent"><div class="bubble">上传视频后，系统会以稳定的 Person ID 连接时间轴、KG 和 Agent 分析。</div></div>
+    <div class="resize-h" id="resizeMain"></div>
+    <div class="right-panel tabbed" id="rightPanel">
+      <div class="panel-tabs" id="rightTabs">
+        <button class="active" data-tab="entities" onclick="setRightTab('entities')">实体</button>
+        <button data-tab="events" onclick="setRightTab('events')">事件</button>
+        <button data-tab="kg" onclick="setRightTab('kg')">KG</button>
+        <button data-tab="logs" onclick="setRightTab('logs')">日志</button>
       </div>
-      <div class="chat-input-w">
-        <input type="text" id="chatInput" placeholder="问问场景里发生了什么..." onkeypress="if(event.keyCode===13)sendChat()">
-        <button onclick="sendChat()">发送</button>
+      <div class="entity-panel tab-view active" id="entityPanel" data-tab-view="entities">
+        <div class="panel-head"><h3>实体档案</h3><span id="entityCountText">0 个实体</span></div>
+        <input type="text" id="entitySearch" placeholder="搜索实体..." oninput="filterEntities(this.value)" style="display:none;width:100%;padding:6px 10px;margin:0 0 8px;background:var(--bg);border:1px solid var(--border);color:var(--text);border-radius:6px;font-size:12px;outline:none">
+        <div class="agent-panel" id="agentPanel"></div>
+        <div class="entity-list" id="entityList"><div class="panel-empty">上传视频后显示 Person 档案<br><span style="font-size:11px">点击行可查看完整轨迹和 KG 证据</span></div></div>
       </div>
+      <div class="resize-v" id="resizeAgent"></div>
+      <div class="event-panel tab-view" id="eventPanel" data-tab-view="events">
+        <div class="panel-head"><h3>事件列表</h3><span id="eventCountText">0 个事件</span></div>
+        <div id="eventList"><div class="panel-empty">分析开始后按时间顺序显示事件</div></div>
+      </div>
+      <div class="evidence-panel tab-view" id="evidencePanel" data-tab-view="kg">
+        <div class="panel-head"><h3>KG 证据子图</h3><span id="kgCountText">0 节点 / 0 边</span></div>
+        <div class="filter-row" id="kgFilters">
+          <button data-filter="all" class="active" onclick="setKGFilter('all')">全部</button>
+          <button data-filter="interacts_with" onclick="setKGFilter('interacts_with')">交互</button>
+          <button data-filter="belongs_to" onclick="setKGFilter('belongs_to')">归属</button>
+          <button data-filter="next" onclick="setKGFilter('next')">时序</button>
+        </div>
+        <div class="kg-graph"><canvas id="kgCanvas"></canvas></div>
+        <div id="kgEvidence"><div class="panel-empty">点击左侧实体行查看关联证据<br><span style="font-size:11px">显示事件归属、人物交互、行为匹配路径</span></div></div>
+      </div>
+      <div class="chat-panel tab-view" id="chatPanel" data-tab-view="logs">
+        <div class="chat-msgs" id="chatMsgs">
+          <div class="chat-msg agent"><div class="bubble">上传视频后，系统会以稳定的 Person ID 连接时间轴、KG 和 Agent 分析。</div></div>
+        </div>
+        <div class="chat-input-w">
+          <input type="text" id="chatInput" placeholder="问问场景里发生了什么..." onkeypress="if(event.keyCode===13)sendChat()">
+          <button onclick="sendChat()">发送</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- SETTINGS -->
+<div class="page" id="page-settings" style="display:none">
+  <div class="settings-container">
+    <h2>设置</h2>
+    <div class="settings-group">
+      <h3>检测参数</h3>
+      <div class="setting-row">
+        <label>置信度阈值 (conf)</label>
+        <input type="range" min="0.05" max="0.5" step="0.01" value="0.15" id="setConf">
+        <span class="set-val" id="setConfVal">0.15</span>
+      </div>
+      <div class="setting-row">
+        <label>输入尺寸 (imgsz)</label>
+        <select id="setImgsz">
+          <option value="480">480</option>
+          <option value="640">640</option>
+          <option value="960" selected>960</option>
+          <option value="1280">1280</option>
+        </select>
+      </div>
+      <div class="setting-row">
+        <label>目标类别 (0=仅人)</label>
+        <input type="number" min="0" max="80" value="0" id="setClasses">
+      </div>
+    </div>
+    <div class="settings-group">
+      <h3>跟踪参数</h3>
+      <div class="setting-row">
+        <label>遮挡容忍帧数 (lost_buffer)</label>
+        <input type="range" min="30" max="300" step="10" value="120" id="setLostBuffer">
+        <span class="set-val" id="setLostBufferVal">120</span>
+      </div>
+      <div class="setting-row">
+        <label>匹配阈值</label>
+        <input type="range" min="0.3" max="0.9" step="0.01" value="0.65" id="setMatchThresh">
+        <span class="set-val" id="setMatchThreshVal">0.65</span>
+      </div>
+      <div class="setting-row">
+        <label>ReID 开关</label>
+        <input type="checkbox" id="setReid">
+      </div>
+      <div class="setting-row">
+        <label>GMC 运动补偿</label>
+        <input type="checkbox" id="setGmc" checked>
+      </div>
+    </div>
+    <div class="settings-group">
+      <h3>Entity 融合</h3>
+      <div class="setting-row">
+        <label>自动合并阈值</label>
+        <input type="range" min="0.5" max="0.95" step="0.01" value="0.72" id="setAutoMerge">
+        <span class="set-val" id="setAutoMergeVal">0.72</span>
+      </div>
+      <div class="setting-row">
+        <label>暂定候选阈值</label>
+        <input type="range" min="0.2" max="0.7" step="0.01" value="0.30" id="setTentative">
+        <span class="set-val" id="setTentativeVal">0.30</span>
+      </div>
+    </div>
+    <div class="settings-actions">
+      <button class="upload-btn" onclick="saveSettings()">保存设置</button>
+      <span class="muted" style="font-size:11px">保存后重新上传视频生效</span>
     </div>
   </div>
 </div>

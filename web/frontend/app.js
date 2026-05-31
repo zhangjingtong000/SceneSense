@@ -8,20 +8,74 @@ let playingFrame=0,playTimer=null,canvasSized=false,latestLiveFrame=-1,frameRequ
 let playbackRange=null;
 let latestCanvasImage=null,latestCanvasSnap={},latestCanvasFrame=0;
 let poseCache={},skeletonEnabled=false,skeletonDataReady=false;
+let appSettings=loadSettings();
 const POSE_MAX_AGE=12;
 const ENTITY_COLORS=['#5b9bd5','#4caf91','#f0a040','#e05a68','#a27bd8','#5ac6c8','#d97842','#8bbf5c','#c96b9e','#6ba8d9'];
-resetAgentView();
 
-// Upload
-document.getElementById('uploadBtn').onclick=()=>document.getElementById('fileInput').click();
-document.getElementById('fileInput').onchange=async()=>{
-  const f=document.getElementById('fileInput').files[0]; if(!f)return;
+// Router
+function route(){
+  const hash=location.hash.replace('#','')||'home';
+  document.querySelectorAll('.page').forEach(p=>p.classList.toggle('active',p.id==='page-'+hash));
+  document.querySelectorAll('.nav-link').forEach(a=>a.classList.toggle('active',a.dataset.page===hash));
+  if(hash==='workspace'){requestAnimationFrame(()=>{renderTimeline();renderEvidence();});}
+}
+window.addEventListener('hashchange',route);
+route();
+
+// Settings
+function loadSettings(){
+  try{return JSON.parse(localStorage.getItem('scenesense:settings'))||{};}catch(_){return {};}
+}
+function saveSettings(){
+  appSettings={
+    conf:document.getElementById('setConf')?.value||'0.15',
+    imgsz:document.getElementById('setImgsz')?.value||'960',
+    classes:document.getElementById('setClasses')?.value||'0',
+    lost_buffer:document.getElementById('setLostBuffer')?.value||'120',
+    matching_threshold:document.getElementById('setMatchThresh')?.value||'0.65',
+    with_reid:document.getElementById('setReid')?.checked||false,
+    with_gmc:document.getElementById('setGmc')?.checked||false,
+    entity_auto:document.getElementById('setAutoMerge')?.value||'0.72',
+    entity_tentative:document.getElementById('setTentative')?.value||'0.30',
+  };
+  localStorage.setItem('scenesense:settings',JSON.stringify(appSettings));
+  addChatMsg('agent','设置已保存。重新上传视频后生效。');
+}
+function syncSettingsToUI(){
+  const s=appSettings;
+  document.getElementById('setConf').value=s.conf||'0.15';
+  document.getElementById('setConfVal').textContent=s.conf||'0.15';
+  document.getElementById('setImgsz').value=s.imgsz||'960';
+  document.getElementById('setClasses').value=s.classes||'0';
+  document.getElementById('setLostBuffer').value=s.lost_buffer||'120';
+  document.getElementById('setLostBufferVal').textContent=s.lost_buffer||'120';
+  document.getElementById('setMatchThresh').value=s.matching_threshold||'0.65';
+  document.getElementById('setMatchThreshVal').textContent=s.matching_threshold||'0.65';
+  document.getElementById('setReid').checked=s.with_reid===true;
+  document.getElementById('setGmc').checked=s.with_gmc!==false;
+  document.getElementById('setAutoMerge').value=s.entity_auto||'0.72';
+  document.getElementById('setAutoMergeVal').textContent=s.entity_auto||'0.72';
+  document.getElementById('setTentative').value=s.entity_tentative||'0.30';
+  document.getElementById('setTentativeVal').textContent=s.entity_tentative||'0.30';
+}
+document.getElementById('setConf').oninput=function(){document.getElementById('setConfVal').textContent=this.value;};
+document.getElementById('setLostBuffer').oninput=function(){document.getElementById('setLostBufferVal').textContent=this.value;};
+document.getElementById('setMatchThresh').oninput=function(){document.getElementById('setMatchThreshVal').textContent=this.value;};
+document.getElementById('setAutoMerge').oninput=function(){document.getElementById('setAutoMergeVal').textContent=this.value;};
+document.getElementById('setTentative').oninput=function(){document.getElementById('setTentativeVal').textContent=this.value;};
+
+// Upload (shared between home and nav)
+function startUpload(file){
+  const fd=new FormData();fd.append('file',file);
   setStatus('loading','上传中...');
-  const fd=new FormData();fd.append('file',f);
-  const r=await fetch('/upload',{method:'POST',body:fd});
-  const d=await r.json();
-  videoId=d.video_id;
-  setStatus('loading','分析中...');
+  fetch('/upload',{method:'POST',body:fd}).then(r=>r.json()).then(d=>{
+    videoId=d.video_id;
+    setStatus('loading','分析中...');
+    location.hash='workspace';
+    setupWorkspace();
+  }).catch(e=>setStatus('error','上传失败'));
+}
+function setupWorkspace(){
   document.getElementById('overlay').style.display='none';
   canvas.style.display='';highlightCanvas.style.display='';
   canvasSized=false;
@@ -34,7 +88,15 @@ document.getElementById('fileInput').onchange=async()=>{
   document.getElementById('chatMsgs').innerHTML='';
   resetAgentView();resetAgentDots();
   connectWS();
+}
+document.getElementById('uploadBtn').onclick=()=>document.getElementById('fileInput').click();
+document.getElementById('homeUploadBtn').onclick=()=>document.getElementById('fileInput').click();
+document.getElementById('fileInput').onchange=function(){
+  const f=this.files[0];if(!f)return;
+  startUpload(f);
 };
+syncSettingsToUI();
+resetAgentView();
 
 // WebSocket
 function connectWS(){
