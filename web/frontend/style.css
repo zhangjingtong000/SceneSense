@@ -95,7 +95,8 @@ button,input,select{font:inherit}
 .muted{color:var(--muted)}
 .node-card{border:1px solid var(--border);border-radius:var(--radius);padding:8px;margin-bottom:8px;background:rgba(255,255,255,.03)}
 .node-card b{color:var(--soft)}
-.kg-graph{height:220px;min-height:160px;border:1px solid var(--border);border-radius:var(--radius);background:#0c0f17;margin-bottom:10px;overflow:hidden;resize:vertical}
+.kg-graph{height:280px;min-height:200px;border:1px solid var(--border);border-radius:var(--radius);background:#0c0f17;margin-bottom:10px;overflow:hidden;position:relative;cursor:grab}
+.kg-graph:active{cursor:grabbing}
 .kg-graph canvas{width:100%;height:100%;display:block}
 .kg-edge{font-size:12px;line-height:1.55;padding:6px 8px;margin:6px 0;background:rgba(255,255,255,.04);border-radius:6px;border-top:3px solid var(--blue)}
 .kg-edge.interacts_with{border-top-color:var(--green)}
