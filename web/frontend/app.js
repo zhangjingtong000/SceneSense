@@ -270,9 +270,9 @@ function updateAgentStatus(agent,status,message){
 }
 function resetAgentView(){
   const ap=document.getElementById('agentPanel');
-  ap.innerHTML=`<div class="agent-row"><div class="dot" id="dotTraj"></div><span class="label">轨迹分析</span><span class="stat" id="statTraj">等待中</span></div>
-    <div class="agent-row"><div class="dot" id="dotInter"></div><span class="label">交互分析</span><span class="stat" id="statInter">等待中</span></div>
-    <div class="agent-row"><div class="dot" id="dotSumm"></div><span class="label">场景总结</span><span class="stat" id="statSumm">等待中</span></div>`;
+  ap.innerHTML=`<div class="agent-row"><div class="dot" id="dotTraj"></div><span class="label">轨迹</span><span class="stat" id="statTraj"></span></div>
+    <div class="agent-row"><div class="dot" id="dotInter"></div><span class="label">交互</span><span class="stat" id="statInter"></span></div>
+    <div class="agent-row"><div class="dot" id="dotSumm"></div><span class="label">场景</span><span class="stat" id="statSumm"></span></div>`;
 }
 
 // Timeline and lifelines
@@ -399,8 +399,12 @@ function renderEvents(){
     item.className='event-item';
     item.onclick=()=>selectEvent(ev);
     const start=Number(ev.frame_start)||0,end=Number(ev.frame_end)||start;
-    item.innerHTML=`<div class="event-title"><span>${escapeHtml(ev.event_id||'事件')}</span><span class="muted">${start}-${end} 帧</span></div>
-      <div class="event-summary">${ev.entity_count||0} 个目标 · ${escapeHtml(String(ev.summary||'暂无摘要').slice(0,120))}</div>`;
+    const evType=(ev.interactions||[]).length?'交互':(ev.entity_count>3?'多目标':'事件');
+    item.innerHTML=`<div class="event-title"><span class="event-badge">${evType}</span><span class="muted" style="font-size:10px">${escapeHtml(ev.event_id||'事件')}</span><span class="muted" style="margin-left:auto">${start}-${end} 帧</span></div>
+      <p class="event-summary">${ev.entity_count||0} 个目标 · ${escapeHtml(String(ev.summary||'暂无摘要').slice(0,120))}</p>
+      <div class="event-meta-row" style="display:flex;gap:16px;margin-top:8px;font-size:10px;color:var(--muted)">
+        <span>${(ev.interactions||[]).length} 交互</span><span>${ev.entity_count||0} 实体</span>
+      </div>`;
     list.appendChild(item);
   });
 }
@@ -430,14 +434,24 @@ function renderEntities(){
     const tracks=(ent.track_ids||[]).join(', ')||'-';
     const summary=decodeMaybeJson(ent.trajectory_summary)||{};
     const points=summary.point_count||0;
-    const candidates=(ent.tentative_merge_candidates||[]).join(', ');
     const tentative=(ent.tentative_merge_candidates||[])[0]||'';
-    const tentativeText=tentative?`待确认 ${escapeHtml(tentative)}?`:'无候选合并';
-    item.innerHTML=`<div class="entity-main"><span class="entity-name" style="color:${entityColor(ent.entity_id)}">${escapeHtml(ent.entity_id)}</span><span class="quality">${qualityLabel(ent.tracking_quality)}</span><button class="highlight-only-btn" type="button" title="仅切换高亮，不跳转">仅高亮</button></div>
+    const qLabel=qualityLabel(ent.tracking_quality);
+    const qClass=ent.tracking_quality||'stable';
+    const avatarColor=entityColor(ent.entity_id);
+    const avatarLetter=(ent.entity_id||'?')[0];
+    item.innerHTML=`<div class="entity-main">
+        <div class="entity-avatar" style="background:${avatarColor}22;color:${avatarColor}">${escapeHtml(avatarLetter)}</div>
+        <div style="flex:1;min-width:0">
+          <div class="entity-name" style="color:${avatarColor}">${escapeHtml(ent.entity_id)}</div>
+          <div style="font-size:10px;color:var(--muted)">ID: ${escapeHtml(tracks)}</div>
+        </div>
+        <span class="quality ${qClass}">${qLabel}</span>
+        <button class="highlight-only-btn" type="button" title="仅切换高亮，不跳转">仅高亮</button>
+      </div>
       <div class="entity-meta">
-        <span>帧 ${ent.first_seen_frame}-${ent.last_seen_frame}</span><span>轨迹点 ${points}</span>
-        <span>track ${escapeHtml(tracks)}</span><span>${tentativeText}</span>
-      </div>`;
+        <span>${ent.first_seen_frame}-${ent.last_seen_frame} 帧</span><span>${points} 轨迹点</span>
+      </div>
+      ${tentative?`<div class="entity-merge"><span>待确认合并: ${escapeHtml(tentative)}</span><button>确认</button></div>`:''}`;
     const highlightBtn=item.querySelector('.highlight-only-btn');
     highlightBtn.onclick=e=>toggleEntityHighlightOnly(e,ent.entity_id);
     list.appendChild(item);
@@ -948,7 +962,7 @@ function setStatus(st,text){
 function entityIndex(id){const m=String(id||'').match(/\d+/);return m?parseInt(m[0],10):9999;}
 function entityColor(id){return ENTITY_COLORS[entityIndex(id)%ENTITY_COLORS.length];}
 function qualityLabel(q){
-  const labels={stable:'稳定',occluded:'遮挡重连',fragmented:'疑似断裂',tentative:'候选合并'};
+  const labels={stable:'跟踪中',occluded:'已重连',fragmented:'碎片',tentative:'待确认'};
   return labels[q]||'未知';
 }
 function edgeLabel(t){
