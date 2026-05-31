@@ -93,32 +93,35 @@ def test_web_display_person_propagates_tentative_predecessor():
 
 def test_frontend_bounded_playback_and_overlay_highlight_contract():
     html = Path("web/frontend/index.html").read_text(encoding="utf-8")
-    toggle_playback = html[
-        html.index("function togglePlayback(){"):html.index("function playFrom(n){")
+    js = Path("web/frontend/app.js").read_text(encoding="utf-8")
+    source = html + "\n" + js
+
+    toggle_playback = js[
+        js.index("function togglePlayback(){"):js.index("function playFrom(n){")
     ]
-    select_event = html[
-        html.index("function selectEvent(ev){"):html.index("function showEventDetail(ev){")
+    select_event = js[
+        js.index("function selectEvent(ev){"):js.index("function showEventDetail(ev){")
     ]
-    highlight_only = html[
-        html.index("function toggleEntityHighlightOnly(e,entityId){"):html.index("function selectEntity(entityId,jump=true){")
+    highlight_only = js[
+        js.index("function toggleEntityHighlightOnly(e,entityId){"):js.index("function selectEntity(entityId,jump=true){")
     ]
-    play_from = html[
-        html.index("function playFrom(n){"):html.index("function stopPlay(){")
+    play_from = js[
+        js.index("function playFrom(n){"):js.index("function stopPlay(){")
     ]
 
     assert 'id="highlightCanvas"' in html
-    assert "let playbackRange=null;" in html
-    assert "startBoundedPlayback(start,end,'event',ev.event_id||'');" in html
-    assert "startBoundedPlayback(start,end,'entity',entityId);" in html
-    assert "Number(ent.first_seen_frame)" in html
-    assert "Number(ent.last_seen_frame)" in html
-    assert "highlightBtn.onclick=e=>toggleEntityHighlightOnly(e,ent.entity_id);" in html
-    assert "e.stopPropagation();" in html
-    assert "clearPlaybackRange();" in html
-    assert "const endFrame=playbackRange?playbackRange.endFrame:totalFrames-1;" in html
-    assert "drawHighlight(highlightCtx,bbox,selectedEntity||selectedPerson||'');" in html
-    assert "ctx.fillText(String(label),labelX+5,labelY);" not in html
-    assert "待确认 ${escapeHtml(tentative)}?" in html
+    assert "let playbackRange=null;" in source
+    assert "startBoundedPlayback(start,end,'event',ev.event_id||'');" in source
+    assert "startBoundedPlayback(start,end,'entity',entityId);" in source
+    assert "Number(ent.first_seen_frame)" in source
+    assert "Number(ent.last_seen_frame)" in source
+    assert "highlightBtn.onclick=e=>toggleEntityHighlightOnly(e,ent.entity_id);" in source
+    assert "e.stopPropagation();" in source
+    assert "clearPlaybackRange();" in source
+    assert "const endFrame=playbackRange?playbackRange.endFrame:totalFrames-1;" in source
+    assert "drawHighlight(highlightCtx,bbox,selectedEntity||selectedPerson||'');" in source
+    assert "ctx.fillText(String(label),labelX+5,labelY);" not in source
+    assert "待确认 ${escapeHtml(tentative)}?" in source
     assert toggle_playback.index("clearPlaybackRange();") < toggle_playback.index("if(playTimer)return;")
     assert "if(playTimer){stopPlay();return;}" not in toggle_playback
     assert "const startValue=Number(ev.frame_start),endValue=Number(ev.frame_end);" in select_event
@@ -135,5 +138,5 @@ def test_frontend_bounded_playback_and_overlay_highlight_contract():
     assert "startBoundedPlayback(" not in highlight_only
     assert "showFrame(Math.min(endFrame,playingFrame+1));" in play_from
     assert "if(playingFrame>=endFrame){stopPlay();return;}" in play_from
-    assert "seg.onclick=()=>selectEvent(ev);" in html
-    assert "item.onclick=()=>selectEvent(ev);" in html
+    assert "seg.onclick=()=>selectEvent(ev);" in source
+    assert "item.onclick=()=>selectEvent(ev);" in source
