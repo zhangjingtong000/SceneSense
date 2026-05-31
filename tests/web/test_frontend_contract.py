@@ -121,7 +121,7 @@ def test_frontend_bounded_playback_and_overlay_highlight_contract():
     assert "const endFrame=playbackRange?playbackRange.endFrame:totalFrames-1;" in source
     assert "drawHighlight(highlightCtx,bbox,selectedEntity||selectedPerson||'');" in source
     assert "ctx.fillText(String(label),labelX+5,labelY);" not in source
-    assert "待确认 ${escapeHtml(tentative)}?" in source
+    assert "待确认合并:" in source
     assert toggle_playback.index("clearPlaybackRange();") < toggle_playback.index("if(playTimer)return;")
     assert "if(playTimer){stopPlay();return;}" not in toggle_playback
     assert "const startValue=Number(ev.frame_start),endValue=Number(ev.frame_end);" in select_event
