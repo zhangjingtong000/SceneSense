@@ -99,6 +99,7 @@ button,input,select{font:inherit}
 .kg-graph:active{cursor:grabbing}
 .kg-graph canvas{width:100%;height:100%;display:block}
 .evidence-panel.tab-view.active{display:flex;flex-direction:column}
+.kg-evidence-panel{flex:0 0 30%;min-height:80px;overflow:auto}
 .kg-edge{font-size:12px;line-height:1.55;padding:6px 8px;margin:6px 0;background:rgba(255,255,255,.04);border-radius:6px;border-top:3px solid var(--blue)}
 .kg-edge.interacts_with{border-top-color:var(--green)}
 .kg-edge.belongs_to{border-top-color:var(--accent)}
