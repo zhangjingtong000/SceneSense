@@ -194,6 +194,14 @@ button,input,select{font:inherit}
   .settings-container{padding:20px 14px}
 }
 
+/* Global scrollbar — minimal gray, borderless */
+::-webkit-scrollbar{width:6px;height:6px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px}
+::-webkit-scrollbar-thumb:hover{background:var(--muted)}
+::-webkit-scrollbar-corner{background:transparent}
+*{scrollbar-width:thin;scrollbar-color:var(--border) transparent}
+
 /* Global range slider — minimal gray */
 input[type=range]{
   -webkit-appearance:none;appearance:none;
