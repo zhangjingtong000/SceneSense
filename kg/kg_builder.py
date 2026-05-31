@@ -1,12 +1,14 @@
 import json
 import time
-import uuid
 from typing import Any
 
 from .graph_store import GraphStore
 
 
 class KGBuilder:
+    _next_behavior_id = 1
+    _next_scene_id = 1
+
     def __init__(self, llm_client: Any, graph_store: GraphStore):
         self.llm = llm_client
         self.gs = graph_store
@@ -15,7 +17,7 @@ class KGBuilder:
         prompt = f"""You are a security surveillance domain expert. Given a domain description, you need to generate a list of behavior templates for video behavior analysis.
 
 Each behavior template must be a JSON object with these fields:
-- "behavior_id": a unique id like "Behavior-{uuid4().hex[:8]}"
+- "behavior_id": leave empty, will be auto-assigned (e.g. "Behavior-1")
 - "pattern_type": short name of the behavior pattern (e.g., "fighting", "loitering", "tailgating")
 - "description": a brief description of what this behavior looks like
 - "rule_definition": an object describing the spatial-temporal conditions, including:
@@ -43,10 +45,9 @@ Return a JSON list of behavior templates. Only return the JSON array, no other t
             templates = [templates]
 
         for tmpl in templates:
-            bid = tmpl.get(
-                "behavior_id",
-                f"Behavior-{uuid.uuid4().hex[:8]}",
-            )
+            bid = tmpl.get("behavior_id") or f"Behavior-{KGBuilder._next_behavior_id}"
+            if bid.startswith("Behavior-") and bid == f"Behavior-{KGBuilder._next_behavior_id}":
+                KGBuilder._next_behavior_id += 1
             self.gs.upsert_node(
                 bid,
                 "Behavior",
@@ -74,7 +75,7 @@ Return a JSON list of behavior templates. Only return the JSON array, no other t
         prompt = f"""You are a scene knowledge builder for a video surveillance system. Given a scene description, generate a single Scene node.
 
 The Scene node must be a JSON object with these fields:
-- "scene_id": a unique id like "Scene-{uuid4().hex[:8]}"
+- "scene_id": leave empty, will be auto-assigned (e.g. "Scene-1")
 - "scene_type": type of scene (e.g., "outdoor_plaza", "indoor_corridor", "parking_lot")
 - "time_range": [start_hour, end_hour] or null if unknown
 - "zone_id": primary zone id
@@ -93,10 +94,9 @@ Return a single JSON object representing the Scene node. Only return the JSON ob
         if isinstance(scene, list) and len(scene) > 0:
             scene = scene[0]
 
-        sid = scene.get(
-            "scene_id",
-            f"Scene-{uuid.uuid4().hex[:8]}",
-        )
+        sid = scene.get("scene_id") or f"Scene-{KGBuilder._next_scene_id}"
+        if sid.startswith("Scene-") and sid == f"Scene-{KGBuilder._next_scene_id}":
+            KGBuilder._next_scene_id += 1
         self.gs.upsert_node(
             sid,
             "Scene",
