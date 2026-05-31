@@ -480,10 +480,19 @@ function toggleEntityHighlightOnly(e,entityId){
 function confirmMerge(entityId,predecessorId){
   if(!predecessorId)return;
   fetch('/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({video_id:videoId,question:`__merge__ ${predecessorId} ${entityId}`})});
-  addChatMsg('agent',`已提交合并请求：${escapeHtml(entityId)} → ${escapeHtml(predecessorId)}。将在下一次分析中生效。`);
-  const ent=entities.find(e=>e.entity_id===entityId);
-  if(ent){ent.tentative_merge_candidates=[];ent.tracking_quality='stable';}
-  renderEntities();renderLifelines();
+  const target=entities.find(e=>e.entity_id===predecessorId);
+  const source=entities.find(e=>e.entity_id===entityId);
+  if(target&&source){
+    target.track_ids=[...new Set([...target.track_ids,...source.track_ids])];
+    target.last_seen_frame=Math.max(target.last_seen_frame,source.last_seen_frame);
+    target.first_seen_frame=Math.min(target.first_seen_frame,source.first_seen_frame);
+    if(source.tracking_quality==='occluded')target.tracking_quality='occluded';
+    target.tentative_merge_candidates=target.tentative_merge_candidates.filter(c=>c!==entityId);
+    entities=entities.filter(e=>e.entity_id!==entityId);
+    lifelines=lifelines.filter(l=>l.entity_id!==entityId);
+    if(selectedEntity===entityId)selectedEntity=predecessorId;
+  }
+  renderEntities();renderLifelines();renderEvidence();
 }
 function selectEntity(entityId,jump=true){
   if(jump){playEntityRange(entityId);return;}
@@ -1082,7 +1091,6 @@ function filterEntities(q){
   const items=list.querySelectorAll('.entity-item');
   items.forEach(item=>{
     const name=(item.querySelector('.entity-name')?.textContent||'').toLowerCase();
-    const meta=(item.querySelector('.entity-meta')?.textContent||'').toLowerCase();
-    item.style.display=(!s||name.includes(s)||meta.includes(s))?'':'none';
+    item.style.display=(!s||name.includes(s))?'':'none';
   });
 }
