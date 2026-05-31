@@ -149,12 +149,12 @@
     <div class="settings-group">
       <h3>检测参数</h3>
       <div class="setting-row">
-        <label>置信度阈值 (conf)</label>
+        <label>置信度阈值 (conf)<br><small>越低检出越多但噪声增大。小目标场景建议 0.08-0.15，干净场景 0.2-0.3。</small></label>
         <input type="range" min="0.05" max="0.5" step="0.01" value="0.15" id="setConf">
         <span class="set-val" id="setConfVal">0.15</span>
       </div>
       <div class="setting-row">
-        <label>输入尺寸 (imgsz)</label>
+        <label>输入尺寸 (imgsz)<br><small>越大越能检出小目标，但更吃显存。小人物场景建议 ≥960，性能优先用 640。</small></label>
         <select id="setImgsz">
           <option value="480">480</option>
           <option value="640">640</option>
@@ -163,47 +163,47 @@
         </select>
       </div>
       <div class="setting-row">
-        <label>目标类别 (0=仅人)</label>
+        <label>目标类别<br><small>0=仅行人，留空或设为其他 COCO 类别 ID 可检测更多类型。</small></label>
         <input type="number" min="0" max="80" value="0" id="setClasses">
       </div>
     </div>
     <div class="settings-group">
       <h3>跟踪参数</h3>
       <div class="setting-row">
-        <label>遮挡容忍帧数 (lost_buffer)</label>
+        <label>遮挡容忍帧数 (lost_buffer)<br><small>目标消失后保留的帧数。密集遮挡场景建议 90-150，固定机位可更高。</small></label>
         <input type="range" min="30" max="300" step="10" value="120" id="setLostBuffer">
         <span class="set-val" id="setLostBufferVal">120</span>
       </div>
       <div class="setting-row">
-        <label>匹配阈值</label>
+        <label>匹配阈值<br><small>检测框与跟踪框匹配的 IoU 下限。越低越激进（易错配），越高越保守。推荐 0.55-0.70。</small></label>
         <input type="range" min="0.3" max="0.9" step="0.01" value="0.65" id="setMatchThresh">
         <span class="set-val" id="setMatchThreshVal">0.65</span>
       </div>
       <div class="setting-row">
-        <label>ReID 开关</label>
+        <label>ReID 外观特征<br><small>开启后利用 ResNet18 特征做外观匹配，有助于遮挡后重识别。GPU 推理，会增加延迟。</small></label>
         <input type="checkbox" id="setReid">
       </div>
       <div class="setting-row">
-        <label>GMC 运动补偿</label>
+        <label>GMC 全局运动补偿<br><small>补偿相机运动（平移/旋转/缩放）。固定监控相机建议关闭以节省 CPU，移动相机必须开启。</small></label>
         <input type="checkbox" id="setGmc" checked>
       </div>
     </div>
     <div class="settings-group">
       <h3>Entity 融合</h3>
       <div class="setting-row">
-        <label>自动合并阈值</label>
+        <label>自动合并阈值<br><small>新 track 与已有 Person 匹配置信度达到此值自动合并。越高越保守，越低越易误合并。推荐 0.68-0.78。</small></label>
         <input type="range" min="0.5" max="0.95" step="0.01" value="0.72" id="setAutoMerge">
         <span class="set-val" id="setAutoMergeVal">0.72</span>
       </div>
       <div class="setting-row">
-        <label>暂定候选阈值</label>
+        <label>暂定候选阈值<br><small>低于自动合并阈值但高于此值的 track 标记为「待确认」。推荐为自动合并阈值的 40-50%。</small></label>
         <input type="range" min="0.2" max="0.7" step="0.01" value="0.30" id="setTentative">
         <span class="set-val" id="setTentativeVal">0.30</span>
       </div>
     </div>
     <div class="settings-actions">
       <button class="upload-btn" onclick="saveSettings()">保存设置</button>
-      <span class="muted" style="font-size:11px">保存后重新上传视频生效</span>
+      <button class="reset-btn" onclick="resetSettings()">恢复默认</button>
     </div>
   </div>
 </div>

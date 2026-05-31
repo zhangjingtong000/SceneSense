@@ -41,6 +41,13 @@ function saveSettings(){
   localStorage.setItem('scenesense:settings',JSON.stringify(appSettings));
   addChatMsg('agent','设置已保存。重新上传视频后生效。');
 }
+function resetSettings(){
+  const defaults={conf:'0.15',imgsz:'960',classes:'0',lost_buffer:'120',matching_threshold:'0.65',with_reid:false,with_gmc:true,entity_auto:'0.72',entity_tentative:'0.30'};
+  appSettings=defaults;
+  localStorage.setItem('scenesense:settings',JSON.stringify(defaults));
+  syncSettingsToUI();
+  addChatMsg('agent','已恢复默认设置。');
+}
 function syncSettingsToUI(){
   const s=appSettings;
   document.getElementById('setConf').value=s.conf||'0.15';
