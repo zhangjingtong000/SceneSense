@@ -469,13 +469,22 @@ function renderEvidence(){
 function renderKGGraph(nodes, edges){
   const canvasEl=document.getElementById('kgCanvas');
   if(!canvasEl)return;
-  const rect=canvasEl.parentElement.getBoundingClientRect();
+  const container=canvasEl.parentElement;
+  const rect=container.getBoundingClientRect();
   const dpr=window.devicePixelRatio||1;
-  const w=Math.max(260,Math.floor(rect.width)),h=Math.max(160,Math.floor(rect.height));
+  const w=Math.max(260,Math.floor(rect.width)),h=Math.max(200,Math.floor(rect.height));
   canvasEl.width=Math.floor(w*dpr);canvasEl.height=Math.floor(h*dpr);
   const g=canvasEl.getContext('2d');
   g.setTransform(dpr,0,0,dpr,0,0);
   g.clearRect(0,0,w,h);
+
+  // Square drawing area centered in the canvas — keeps circles round
+  const side=Math.min(w,h);
+  const ox=(w-side)/2,oy=(h-side)/2;
+  const kgZoom=parseFloat(container.dataset.zoom||'1');
+  const kgPanX=parseFloat(container.dataset.panX||'0');
+  const kgPanY=parseFloat(container.dataset.panY||'0');
+
   const nodeMap=new Map((nodes||[]).map(n=>[n.node_id,n]));
   const ids=new Set();
   (edges||[]).forEach(e=>{ids.add(e.src);ids.add(e.tgt);});
@@ -487,11 +496,14 @@ function renderKGGraph(nodes, edges){
   const graphNodeIds=new Set(graphNodes.map(n=>n.node_id));
   const graphEdges=(edges||[]).filter(e=>graphNodeIds.has(e.src)&&graphNodeIds.has(e.tgt)).slice(0,36);
   if(!graphNodes.length){
-    g.fillStyle='#9aa3af';g.font='12px Microsoft YaHei, sans-serif';g.fillText('暂无图数据',16,28);
+    g.fillStyle='#9aa3af';g.font='12px Microsoft YaHei, sans-serif';g.fillText('暂无图数据',ox+16,oy+28);
     return;
   }
-  const cx=w/2,cy=h/2;
-  const radius=Math.max(48,Math.min(w,h)/2-34);
+
+  const cx=ox+side/2+kgPanX,cy=oy+side/2+kgPanY;
+  const baseRadius=Math.max(36,side/2-36);
+  const radius=baseRadius*kgZoom;
+
   const pos=new Map();
   graphNodes.forEach((node,i)=>{
     if(node.node_id===selectedEntity){
@@ -503,26 +515,82 @@ function renderKGGraph(nodes, edges){
       pos.set(node.node_id,{x:cx+Math.cos(angle)*radius,y:cy+Math.sin(angle)*radius});
     }
   });
+
+  // Clamp all positions to stay within the square
+  pos.forEach(p=>{
+    p.x=Math.max(ox+16,Math.min(ox+side-16,p.x));
+    p.y=Math.max(oy+16,Math.min(oy+side-16,p.y));
+  });
+
   g.lineWidth=1;
   graphEdges.forEach(edge=>{
     const a=pos.get(edge.src),b=pos.get(edge.tgt);
     if(!a||!b)return;
     g.strokeStyle=edgeColor(edge.edge_type);
-    g.globalAlpha=.72;
+    g.globalAlpha=.55;
     g.beginPath();g.moveTo(a.x,a.y);g.lineTo(b.x,b.y);g.stroke();
   });
   g.globalAlpha=1;
+
+  const nodeR=Math.max(6,Math.min(10,8*kgZoom));
   graphNodes.forEach(node=>{
     const p=pos.get(node.node_id);
     const selected=node.node_id===selectedEntity;
     g.beginPath();
     g.fillStyle=selected?'#f0a040':nodeColor(node.node_type);
-    g.arc(p.x,p.y,selected?10:8,0,Math.PI*2);g.fill();
-    g.strokeStyle=selected?'#fff':'#20242c';g.lineWidth=2;g.stroke();
+    g.arc(p.x,p.y,selected?nodeR+2:nodeR,0,Math.PI*2);g.fill();
+    g.strokeStyle=selected?'#fff':'#20242c';g.lineWidth=selected?2.5:1.5;g.stroke();
     g.fillStyle='#e8ebf0';g.font='11px Microsoft YaHei, sans-serif';g.textAlign='center';
-    g.fillText(shortNodeLabel(node.node_id),p.x,Math.min(h-8,p.y+22));
+    g.fillText(shortNodeLabel(node.node_id),p.x,Math.min(oy+side-6,p.y+nodeR+16));
   });
+
+  // Zoom hint
+  if(kgZoom>1.01||kgZoom<0.99){
+    g.fillStyle='rgba(255,255,255,.06)';g.fillRect(ox+side-44,oy+4,40,18);
+    g.fillStyle='#9aa3af';g.font='10px system-ui';g.textAlign='right';
+    g.fillText(Math.round(kgZoom*100)+'%',ox+side-10,oy+16);
+  }
 }
+
+// KG zoom + pan via mouse wheel and drag
+(function(){
+  const el=()=>document.getElementById('kgCanvas')?.parentElement;
+  let dragging=false,lastX=0,lastY=0;
+  function redraw(){
+    const nodes=kgGraph.nodes||[],edges=kgGraph.edges||[];
+    const graphEdges=selectedEntity?edges.filter(edge=>{
+      const near=edge.src===selectedEntity||edge.tgt===selectedEntity||isNeighborOfSelected(edge);
+      return near&&(kgFilter==='all'||edge.edge_type===kgFilter);
+    }):edges.filter(edge=>kgFilter==='all'||edge.edge_type===kgFilter).slice(0,28);
+    renderKGGraph(nodes, graphEdges);
+  }
+  document.addEventListener('wheel',e=>{
+    const c=el();if(!c||!e.target.closest('.kg-graph'))return;
+    e.preventDefault();
+    const z=parseFloat(c.dataset.zoom||'1');
+    const newZ=Math.max(.4,Math.min(3,z+(e.deltaY<0?.15:-.15)));
+    c.dataset.zoom=newZ;
+    redraw();
+  },{passive:false});
+  document.addEventListener('mousedown',e=>{
+    const c=el();if(!c||!e.target.closest('.kg-graph'))return;
+    dragging=true;lastX=e.clientX;lastY=e.clientY;
+  });
+  document.addEventListener('mousemove',e=>{
+    if(!dragging)return;
+    const c=el();if(!c)return;
+    c.dataset.panX=parseFloat(c.dataset.panX||'0')+(e.clientX-lastX);
+    c.dataset.panY=parseFloat(c.dataset.panY||'0')+(e.clientY-lastY);
+    lastX=e.clientX;lastY=e.clientY;
+    redraw();
+  });
+  document.addEventListener('mouseup',()=>{dragging=false;});
+  document.addEventListener('dblclick',e=>{
+    const c=el();if(!c||!e.target.closest('.kg-graph'))return;
+    c.dataset.zoom='1';c.dataset.panX='0';c.dataset.panY='0';
+    redraw();
+  });
+})();
 function isNeighborOfSelected(edge){
   const edges=kgGraph.edges||[];
   const neighbors=new Set();
