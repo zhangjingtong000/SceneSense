@@ -183,7 +183,7 @@ function renderTimeline(){
   const bar=document.getElementById('timelineBar');
   bar.innerHTML='';
   if(!events.length){
-    bar.innerHTML='<div class="panel-empty" style="padding:9px 10px">等待事件生成</div>';
+    bar.innerHTML='<div class="panel-empty" style="padding:9px 10px">分析中，事件片段将在此显示</div>';
     return;
   }
   const total=getTimelineTotal();
@@ -214,7 +214,7 @@ function renderLifelines(){
   const pane=document.getElementById('lifelinePane');
   pane.innerHTML='';
   if(!lifelines.length){
-    pane.innerHTML='<div class="panel-empty">等待稳定实体 ID</div>';
+    pane.innerHTML='<div class="panel-empty">检测到人物后将显示连续轨迹段，断开处为虚线缺口</div>';
     return;
   }
   const total=getTimelineTotal();
@@ -293,7 +293,7 @@ function renderEvents(){
   if(!list||!count)return;
   count.textContent=`${events.length} 个事件`;
   if(!events.length){
-    list.innerHTML='<div class="panel-empty">等待事件生成</div>';
+    list.innerHTML='<div class="panel-empty">分析开始后按时间顺序显示事件片段</div>';
     return;
   }
   list.innerHTML='';
@@ -317,11 +317,14 @@ function setRightTab(tab){
 // Entities and KG evidence
 function renderEntities(){
   const list=document.getElementById('entityList');
+  const searchBox=document.getElementById('entitySearch');
   document.getElementById('entityCountText').textContent=`${entities.length} 个实体`;
   if(!entities.length){
-    list.innerHTML='<div class="panel-empty">上传视频后显示 Person 生命线</div>';
+    list.innerHTML='<div class="panel-empty">上传视频后显示 Person 档案。点击行查看轨迹和 KG 证据。</div>';
+    if(searchBox)searchBox.style.display='none';
     return;
   }
+  if(searchBox)searchBox.style.display='';
   list.innerHTML='';
   entities.slice().sort((a,b)=>entityIndex(a.entity_id)-entityIndex(b.entity_id)).forEach(ent=>{
     const item=document.createElement('div');
@@ -375,7 +378,7 @@ function renderEvidence(){
   }):edges.filter(edge=>kgFilter==='all'||edge.edge_type===kgFilter).slice(0,28);
   renderKGGraph(nodes, graphEdges);
   if(!selectedEntity){
-    box.innerHTML=nodes.length?'<div class="panel-empty">选择一个实体查看 1-2 跳证据链；上方显示当前 KG 概览。</div>':'<div class="panel-empty">暂无 KG 图数据。</div>';
+    box.innerHTML=nodes.length?'<div class="panel-empty">点击左侧实体行，查看关联事件、交互记录和推理路径</div>':'<div class="panel-empty">尚未生成 KG 数据。分析完成后自动构建。</div>';
     return;
   }
   const related=graphEdges;
@@ -844,3 +847,27 @@ function escapeHtml(s){
     document.addEventListener('mousemove',onMove);document.addEventListener('mouseup',onUp);
   });
 })();
+
+// Keyboard shortcuts
+document.addEventListener('keydown',e=>{
+  if(e.target.tagName==='INPUT'||e.target.tagName==='TEXTAREA')return;
+  switch(e.key){
+    case 'ArrowLeft': if(totalFrames)showFrame(Math.max(0,playingFrame-1));e.preventDefault();break;
+    case 'ArrowRight': if(totalFrames)showFrame(Math.min(totalFrames-1,playingFrame+1));e.preventDefault();break;
+    case ' ': togglePlayback();e.preventDefault();break;
+    case 'Escape': selectedEntity=null;selectedPerson=null;renderEntities();renderLifelines();renderEvidence();redrawSelectedHighlight();hidePersonCard();break;
+  }
+});
+
+// Entity search filter
+function filterEntities(q){
+  const s=q.trim().toLowerCase();
+  const list=document.getElementById('entityList');
+  if(!list)return;
+  const items=list.querySelectorAll('.entity-item');
+  items.forEach(item=>{
+    const name=(item.querySelector('.entity-name')?.textContent||'').toLowerCase();
+    const meta=(item.querySelector('.entity-meta')?.textContent||'').toLowerCase();
+    item.style.display=(!s||name.includes(s)||meta.includes(s))?'':'none';
+  });
+}
