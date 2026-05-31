@@ -90,7 +90,8 @@ function setupWorkspace(){
   connectWS();
 }
 document.getElementById('uploadBtn').onclick=()=>document.getElementById('fileInput').click();
-document.getElementById('homeUploadBtn').onclick=()=>document.getElementById('fileInput').click();
+const homeBtn=document.getElementById('homeUploadBtn');
+if(homeBtn)homeBtn.onclick=()=>document.getElementById('fileInput').click();
 document.getElementById('fileInput').onchange=function(){
   const f=this.files[0];if(!f)return;
   startUpload(f);
