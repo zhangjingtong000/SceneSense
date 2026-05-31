@@ -134,8 +134,10 @@ button,input,select{font:inherit}
   .right-panel{width:100%;max-width:none;min-width:0;border-left:none;border-top:1px solid var(--border);height:58vh}
 }
 /* Pages */
-.page{flex:1;min-height:0;overflow:auto}
-.page:not(.active){display:none}
+.page{flex:1;min-height:0;overflow:hidden;display:flex;flex-direction:column}
+.page:not(.active){display:none!important}
+.page.active{display:flex}
+#page-home,#page-settings{overflow:auto}
 
 /* Home */
 .home-hero{text-align:center;padding:clamp(32px,8vh,64px) 20px 28px}
