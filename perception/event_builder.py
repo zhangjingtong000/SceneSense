@@ -9,6 +9,8 @@ from utils.serialization import to_jsonable
 
 
 class EventBuilder:
+    _next_id = 1
+
     def __init__(
         self,
         event_interval_frames: int = 30,
@@ -61,10 +63,8 @@ class EventBuilder:
         }
         event = to_jsonable(event)
 
-        event_hash = hashlib.md5(
-            json.dumps(event, sort_keys=True).encode()
-        ).hexdigest()[:12]
-        event["event_id"] = f"Event-{event_hash}"
+        event["event_id"] = f"Event-{EventBuilder._next_id}"
+        EventBuilder._next_id += 1
 
         return event
 
