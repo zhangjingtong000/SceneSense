@@ -142,6 +142,8 @@ class EntityProfileManager:
             out = dict(obj)
             out["entity_id"] = entity_id
             out["tracking_quality"] = profile.tracking_quality
+            if profile.tentative_merge_candidates:
+                out["tentative_predecessor"] = profile.tentative_merge_candidates[0]
             enriched.append(out)
         return enriched
 
@@ -192,7 +194,11 @@ class EntityProfileManager:
                 best_score = score
                 best_factors = factors
 
-        if best_entity_id and best_score >= self.auto_merge_threshold:
+        if (
+            best_entity_id
+            and best_score >= self.auto_merge_threshold
+            and best_factors.get("spatially_plausible", False)
+        ):
             self._track_to_entity[track_id] = best_entity_id
             profile = self._profiles[best_entity_id]
             self._record_debug_decision(
@@ -253,7 +259,10 @@ class EntityProfileManager:
             return 0.0, {"frame_gap": frame_gap, "reason": "gap_exceeds_limit"}
 
         centroid = list(obj.get("centroid", [0.0, 0.0]))
-        distance = _centroid_distance(profile.last_centroid, centroid)
+        raw_distance = _centroid_distance(profile.last_centroid, centroid)
+        predicted_centroid = self._predict_centroid(profile, obj)
+        predicted_distance = _centroid_distance(predicted_centroid, centroid)
+        distance = min(raw_distance, predicted_distance)
         position_score = max(0.0, 1.0 - distance / self.max_position_gap_px)
         time_score = max(0.0, 1.0 - frame_gap / self.max_merge_gap_frames)
         appearance_feature = list(obj.get("appearance_feature", []))
@@ -272,12 +281,45 @@ class EntityProfileManager:
         result_factors = {
             "frame_gap": frame_gap,
             "distance_px": round(distance, 3),
+            "raw_distance_px": round(raw_distance, 3),
+            "predicted_distance_px": round(predicted_distance, 3),
+            "spatially_plausible": distance <= self.max_position_gap_px,
             "position_score": round(position_score, 3),
             "time_score": round(time_score, 3),
         }
         if appearance_score is not None:
             result_factors["appearance_score"] = round(appearance_score, 3)
         return score, result_factors
+
+    def _predict_centroid(self, profile: EntityProfile, obj: dict[str, Any]) -> list[float]:
+        if len(profile.global_trajectory) < 2:
+            return list(profile.last_centroid)
+
+        latest = profile.global_trajectory[-1]
+        previous = None
+        for point in reversed(profile.global_trajectory[:-1]):
+            if len(point) >= 3 and float(point[2]) < float(latest[2]):
+                previous = point
+                break
+        trajectory = obj.get("trajectory") or []
+        if previous is None or len(latest) < 3 or not trajectory or len(trajectory[-1]) < 3:
+            return list(profile.last_centroid)
+
+        sample_dt = float(latest[2]) - float(previous[2])
+        gap_seconds = max(0.0, float(trajectory[-1][2]) - float(latest[2]))
+        if sample_dt <= 0.0 or gap_seconds <= 0.0:
+            return list(profile.last_centroid)
+
+        vx = (float(latest[0]) - float(previous[0])) / sample_dt
+        vy = (float(latest[1]) - float(previous[1])) / sample_dt
+        dx, dy = vx * gap_seconds, vy * gap_seconds
+        distance = math.sqrt(dx * dx + dy * dy)
+        max_projection = self.max_position_gap_px * 2.0
+        if distance > max_projection and distance > 0.0:
+            scale = max_projection / distance
+            dx *= scale
+            dy *= scale
+        return [float(latest[0]) + dx, float(latest[1]) + dy]
 
     def _apply_observation(
         self,

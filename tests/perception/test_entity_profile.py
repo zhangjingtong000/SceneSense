@@ -276,3 +276,47 @@ def test_tentative_candidate_does_not_promote_when_position_is_far():
 
     assert enriched[0]["entity_id"] == "Person-2"
     assert mgr.get_profile("Person-2").tentative_merge_candidates == ["Person-1"]
+
+
+def test_moving_person_reappearance_uses_predicted_position_for_conservative_merge():
+    mgr = EntityProfileManager(auto_merge_threshold=0.72, max_position_gap_px=40.0)
+    mgr.update([track(3, 10, 100, 100, [1.0, 0.0], direction=0)], frame_idx=10, timestamp=10 / 30.0)
+    mgr.update([track(3, 11, 110, 100, [1.0, 0.0], direction=0)], frame_idx=11, timestamp=11 / 30.0)
+
+    enriched = mgr.update(
+        [track(17, 16, 160, 100, [0.99, 0.01], direction=0)],
+        frame_idx=16,
+        timestamp=16 / 30.0,
+    )
+
+    assert enriched[0]["entity_id"] == "Person-1"
+    assert mgr.get_profile("Person-1").track_ids == [3, 17]
+    assert mgr.get_profile("Person-1").merge_evidence[-1]["factors"]["predicted_distance_px"] == 0.0
+
+
+def test_appearance_only_does_not_auto_merge_when_spatial_gap_is_implausible():
+    mgr = EntityProfileManager(auto_merge_threshold=0.60, tentative_threshold=0.30, max_position_gap_px=100.0)
+    mgr.update([track(3, 10, 100, 100, [1.0, 0.0])], frame_idx=10, timestamp=10 / 30.0)
+
+    enriched = mgr.update(
+        [track(17, 11, 1000, 1000, [1.0, 0.0])],
+        frame_idx=11,
+        timestamp=11 / 30.0,
+    )
+
+    assert enriched[0]["entity_id"] == "Person-2"
+    assert mgr.get_profile("Person-1").track_ids == [3]
+
+
+def test_tentative_entity_output_exposes_predecessor_for_ui():
+    mgr = EntityProfileManager(auto_merge_threshold=0.8, tentative_threshold=0.35)
+    mgr.update([track(3, 10, 100, 100, [1.0, 0.0])], frame_idx=10, timestamp=10 / 30.0)
+
+    enriched = mgr.update(
+        [track(17, 18, 210, 180, [0.7, 0.3])],
+        frame_idx=18,
+        timestamp=18 / 30.0,
+    )
+
+    assert enriched[0]["entity_id"] == "Person-2"
+    assert enriched[0]["tentative_predecessor"] == "Person-1"

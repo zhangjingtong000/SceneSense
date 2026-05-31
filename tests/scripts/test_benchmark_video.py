@@ -4,6 +4,7 @@ from scripts.benchmark_video import (
     format_value,
     parse_classes,
     print_summary,
+    summarize_speed_levels,
     summarize_event,
 )
 
@@ -106,3 +107,11 @@ def test_parser_supports_optional_entity_debug():
     assert args.entity_auto_threshold == 0.72
     assert args.entity_promotion_observations == 5
     assert args.entity_promotion_position == 0.25
+
+
+def test_summarize_speed_levels_records_fast_samples():
+    summary = summarize_speed_levels([0.01, 0.02, 0.05, 0.1, 0.2, 0.3, 0.4, 0.6, 0.8, 1.2])
+
+    assert summary["sample_count"] == 10
+    assert summary["distribution"]["快速"] >= 1
+    assert summary["distribution"]["奔跑"] >= 1
