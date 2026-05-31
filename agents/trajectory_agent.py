@@ -13,10 +13,36 @@ from .base_agent import BaseAgent
 from .llm_client import LLMClient
 
 
+SPEED_LEVEL_LABELS = {
+    "stationary": "静止", "slow": "缓慢", "normal": "正常",
+    "fast": "快速", "running": "奔跑", "unknown": "未知",
+}
+
+
+def normalize_image_speed(tracklet: dict, speed_px_s: float) -> float:
+    bbox = tracklet.get("bbox") or []
+    if len(bbox) != 4:
+        return 0.0
+    height = max(1.0, float(bbox[3]) - float(bbox[1]))
+    return max(0.0, float(speed_px_s)) / height
+
+
+def classify_normalized_speed(normalized_speed: float, normalizer: "VelocityNormalizer") -> str:
+    if normalized_speed <= normalizer.stationary_threshold:
+        return "stationary"
+    if normalized_speed <= normalizer.loitering_threshold:
+        return "slow"
+    if normalized_speed + 1e-9 >= normalizer.running_threshold * 1.5:
+        return "running"
+    if normalized_speed + 1e-9 >= normalizer.running_threshold:
+        return "fast"
+    return "normal"
+
+
 class VelocityNormalizer:
     """统计自适应速度归一化器。
 
-    维护滑动窗口收集场景中所有目标的速度观察值，
+    维护滑动窗口收集场景中所有目标的归一化速度观察值，
     用百分位动态计算低速/中速/高速阈值，自动适配不同相机距离和分辨率。
     """
 
@@ -26,9 +52,9 @@ class VelocityNormalizer:
         stationary_percentile: float = 0.15,
         loitering_percentile: float = 0.35,
         running_percentile: float = 0.85,
-        min_stationary_speed: float = 1.0,
-        min_loitering_speed: float = 2.0,
-        min_running_speed: float = 10.0,
+        min_stationary_speed: float = 0.03,
+        min_loitering_speed: float = 0.12,
+        min_running_speed: float = 0.75,
     ):
         self._window: deque[float] = deque(maxlen=window_size)
         self.stationary_p = stationary_percentile
@@ -41,7 +67,7 @@ class VelocityNormalizer:
         self._dirty = True
 
     def observe(self, speed: float):
-        """记录一个速度观察值（像素/秒）。"""
+        """记录一个人物框高度归一化后的速度观察值。"""
         self._window.append(speed)
         self._dirty = True
 
@@ -116,7 +142,7 @@ class TrajectoryAgent(BaseAgent):
 
         all_speeds: list[float] = []
         for t in tracklets:
-            spd = t.get("velocity_ms", 0)
+            spd = self._normalized_speed(t, float(t.get("velocity_ms", 0) or 0))
             if spd > 0:
                 all_speeds.append(spd)
         if all_speeds:
@@ -128,7 +154,7 @@ class TrajectoryAgent(BaseAgent):
 
         for tracklet in tracklets:
             track_id = tracklet.get("track_id", 0)
-            entity_id = f"Entity-{track_id}"
+            entity_id = str(tracklet.get("entity_id") or f"Entity-{track_id}")
 
             data = self._describe_motion(tracklet)
             pose_label = self._describe_pose(tracklet.get("pose_keypoints", []))
@@ -168,6 +194,11 @@ class TrajectoryAgent(BaseAgent):
         "walking": "行走", "walking_fast": "快速", "running": "奔跑",
         "erratic": "无规则", "unknown": "未知",
     }
+    _SPEED_LEVEL_MAP = SPEED_LEVEL_LABELS
+
+    @staticmethod
+    def _normalized_speed(tracklet: dict, speed_px_s: float) -> float:
+        return normalize_image_speed(tracklet, speed_px_s)
 
     def _describe_motion(self, tracklet: dict) -> dict:
         """返回结构化运动数据。"""
@@ -178,7 +209,8 @@ class TrajectoryAgent(BaseAgent):
 
         if len(trajectory) < 2:
             return {"label": "未知", "confidence": 0.3, "evidence": ["轨迹点<2"],
-                    "speed_px": 0, "speed_pct": 50, "direction_change": 0, "pose": "", "duration": 0}
+                    "speed_px": 0, "normalized_speed": 0, "speed_pct": 50,
+                    "speed_level": "未知", "direction_change": 0, "pose": "", "duration": 0}
 
         speeds: list[float] = []
         dirs: list[float] = []
@@ -186,7 +218,11 @@ class TrajectoryAgent(BaseAgent):
             x0, y0 = trajectory[i-1][0], trajectory[i-1][1]
             x1, y1 = trajectory[i][0], trajectory[i][1]
             dx, dy = x1 - x0, y1 - y0
-            speeds.append(math.sqrt(dx*dx + dy*dy))
+            if len(trajectory[i - 1]) >= 3 and len(trajectory[i]) >= 3:
+                dt = float(trajectory[i][2]) - float(trajectory[i - 1][2])
+            else:
+                dt = 0.0
+            speeds.append(math.sqrt(dx*dx + dy*dy) / dt if dt > 0 else math.sqrt(dx*dx + dy*dy))
             dirs.append(math.degrees(math.atan2(dy, dx)) % 360)
 
         time_span = max(float(trajectory[-1][2]) - float(trajectory[0][2])
@@ -194,12 +230,13 @@ class TrajectoryAgent(BaseAgent):
                         else len(trajectory) * 0.04, 0.1)
         mean_speed = sum(speeds) / len(speeds) if speeds else 0
         effective_speed = velocity_ms if velocity_ms > 0 else mean_speed
+        normalized_speed = self._normalized_speed(tracklet, effective_speed)
 
         if len(dirs) >= 3:
             rads = [math.radians(d) for d in dirs]
             ms, mc = sum(math.sin(r) for r in rads)/len(rads), sum(math.cos(r) for r in rads)/len(rads)
             straightness = math.sqrt(ms*ms + mc*mc)
-            dir_spread = 0.0 if straightness >= 0.99 else math.degrees(math.sqrt(-2*math.log(straightness)))
+            dir_spread = 0.0 if straightness >= 0.99 else math.degrees(math.sqrt(-2*math.log(max(straightness, 1e-6))))
         else:
             straightness, dir_spread = 1.0, 0.0
         # 偏离次数（> 45° 的帧间跳变）
@@ -213,36 +250,45 @@ class TrajectoryAgent(BaseAgent):
         # 百分位：用阈值插值估算
         if n.sample_count < 10:
             pct = 50
-        elif effective_speed <= v_stat:
-            pct = max(0, int(n.stationary_p * 100 * (effective_speed / max(v_stat, 0.1))))
-        elif effective_speed >= v_run:
-            pct = min(100, int(100 - (100 - n.running_p * 100) * (1 - (effective_speed - v_run) / max(effective_speed - v_run + 50, 1))))
+        elif normalized_speed <= v_stat:
+            pct = max(0, int(n.stationary_p * 100 * (normalized_speed / max(v_stat, 0.001))))
+        elif normalized_speed >= v_run:
+            pct = min(100, int(100 - (100 - n.running_p * 100) * (1 - (normalized_speed - v_run) / max(normalized_speed - v_run + 0.5, 0.01))))
         else:
-            ratio = (effective_speed - v_loiter) / max(v_run - v_loiter, 0.1)
+            ratio = (normalized_speed - v_loiter) / max(v_run - v_loiter, 0.001)
             pct = int(n.loitering_p * 100 + ratio * (n.running_p * 100 - n.loitering_p * 100))
 
+        speed_level = classify_normalized_speed(normalized_speed, n)
+
         label, conf = "unknown", 0.5
-        if total_disp < 10 and len(trajectory) >= 10:
-            label, conf = "stationary", 0.85
-        elif total_disp < 30:
-            label, conf = "slow", (0.70 if len(trajectory) >= 10 else 0.55)
-        elif effective_speed <= v_stat and len(trajectory) >= 5:
-            label, conf = "stationary", 0.85
-        elif effective_speed <= v_loiter and dir_spread > 60 and len(trajectory) >= 10:
-            label, conf = "loitering", 0.85
-        elif effective_speed >= v_run and len(trajectory) >= 5:
+        if speed_level == "running" and len(trajectory) >= 5:
+            label, conf = "running", 0.88
+        elif speed_level == "fast" and len(trajectory) >= 5:
             label, conf = "walking_fast", 0.85
+        elif total_disp < 10 and normalized_speed <= v_stat and len(trajectory) >= 10:
+            label, conf = "stationary", 0.85
+        elif normalized_speed <= v_stat and len(trajectory) >= 5:
+            label, conf = "stationary", 0.85
+        elif normalized_speed <= v_loiter and dir_spread > 60 and len(trajectory) >= 10:
+            label, conf = "loitering", 0.85
         elif dir_spread > 80 and total_disp > 50:
             label, conf = "erratic", 0.80
+        elif normalized_speed <= v_loiter:
+            label, conf = "slow", (0.70 if len(trajectory) >= 10 else 0.55)
         else:
             label, conf = "walking", 0.85
 
-        evidence.append(f"speed={effective_speed:.1f}px/s median={n.median_speed:.1f} spread={dir_spread:.0f}°")
+        evidence.append(
+            f"speed={effective_speed:.1f}px/s normalized={normalized_speed:.3f}/s "
+            f"median={n.median_speed:.3f}/s spread={dir_spread:.0f}°"
+        )
         return {
             "label": self._LABEL_MAP.get(label, label),
             "confidence": conf,
             "speed_px": round(effective_speed, 1),
+            "normalized_speed": round(normalized_speed, 3),
             "speed_pct": pct,
+            "speed_level": self._SPEED_LEVEL_MAP.get(speed_level, speed_level),
             "direction_change": changes,
             "pose": "",
             "duration": round(time_span, 1),

@@ -15,6 +15,8 @@ class YOLODetector:
     ):
         self.model = YOLO(model_path)
         self.model.to(device)
+        self.device = device
+        self.use_half = str(device).startswith("cuda")
         self.conf_threshold = conf_threshold
         self.classes = classes
         self.imgsz = imgsz
@@ -22,7 +24,8 @@ class YOLODetector:
     def detect(self, frame: np.ndarray) -> list[dict]:
         results = self.model(
             frame, conf=self.conf_threshold, classes=self.classes,
-            imgsz=self.imgsz, verbose=False,
+            imgsz=self.imgsz, verbose=False, device=self.device,
+            half=self.use_half,
         )[0]
 
         detections: list[dict] = []
@@ -47,6 +50,8 @@ class PoseEstimator:
     def __init__(self, model_path: str = "yolov8l-pose.pt", device: str = "cpu"):
         self.model = YOLO(model_path)
         self.model.to(device)
+        self.device = device
+        self.use_half = str(device).startswith("cuda")
 
     def estimate(self, frame: np.ndarray, bboxes: list[list[float]]) -> list[list[list[float]]]:
         """对每个 bbox 做 crop + pose 推理，返回关键点列表。
@@ -58,21 +63,32 @@ class PoseEstimator:
         Returns:
             [[[x,y,conf]*17], ...] 每个 bbox 对应的 17 个 COCO 关键点
         """
-        results = []
-        for x1, y1, x2, y2 in bboxes:
+        results = [[] for _ in bboxes]
+        crops = []
+        crop_meta = []
+        for bbox_idx, (x1, y1, x2, y2) in enumerate(bboxes):
             x1i, y1i = max(0, int(x1)), max(0, int(y1))
             x2i, y2i = min(frame.shape[1], int(x2)), min(frame.shape[0], int(y2))
             if x2i <= x1i or y2i <= y1i:
-                results.append([])
                 continue
 
             crop = frame[y1i:y2i, x1i:x2i]
-            r = self.model(crop, verbose=False)[0]
+            crop_meta.append((bbox_idx, x1i, y1i))
+            crops.append(crop)
+
+        if not crops:
+            return results
+
+        pose_results = self.model(
+            crops,
+            verbose=False,
+            device=self.device,
+            half=self.use_half,
+        )
+        for (result_idx, x1i, y1i), r in zip(crop_meta, pose_results):
             if r.keypoints is not None and len(r.keypoints.data) > 0:
                 # 取置信度最高的那个人
                 kpts = r.keypoints.data[0]
-                scores = kpts[:, 2] if kpts.shape[1] > 2 else np.ones(17)
-                best_idx = int(scores.mean())
                 if len(r.keypoints.data) > 1:
                     # 选关键点平均置信度最高的
                     best = 0
@@ -89,8 +105,6 @@ class PoseEstimator:
                 kpts_global = []
                 for kp in kpts_crop:
                     kpts_global.append([kp[0] + x1i, kp[1] + y1i, kp[2] if len(kp) > 2 else 1.0])
-                results.append(kpts_global)
-            else:
-                results.append([])
+                results[result_idx] = kpts_global
 
         return results

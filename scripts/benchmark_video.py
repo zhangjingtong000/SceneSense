@@ -11,6 +11,7 @@ import argparse
 import json
 import sys
 import time
+from collections import Counter
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -23,6 +24,12 @@ if str(ROOT) not in sys.path:
 
 from kg.continuity import write_continuity_event
 from kg.graph_store import GraphStore
+from agents.trajectory_agent import (
+    SPEED_LEVEL_LABELS,
+    VelocityNormalizer,
+    classify_normalized_speed,
+    normalize_image_speed,
+)
 from perception.detector import YOLODetector
 from perception.entity_profile import EntityProfileManager
 from perception.event_builder import EventBuilder
@@ -69,6 +76,7 @@ def benchmark_video(args: argparse.Namespace) -> dict[str, Any]:
         reid_device=device,
         with_reid=args.with_reid,
         with_gmc=not args.no_gmc,
+        reid_interval=args.reid_interval,
     )
     profiles = EntityProfileManager(
         auto_merge_threshold=args.entity_auto_threshold,
@@ -95,6 +103,7 @@ def benchmark_video(args: argparse.Namespace) -> dict[str, Any]:
     previous_event_id = ""
     tracker_results: list[dict[str, Any]] = []
     events: list[dict[str, Any]] = []
+    normalized_speed_samples: list[float] = []
 
     while True:
         ok, frame = cap.read()
@@ -108,6 +117,10 @@ def benchmark_video(args: argparse.Namespace) -> dict[str, Any]:
         tracked = tracker.update(detections, frame_idx, timestamp, frame)
         tracked = profiles.update(tracked, frame_idx, timestamp) if tracked else []
         metrics.observe(detections, tracked, profiles.to_entities())
+        for item in tracked:
+            normalized_speed = normalize_image_speed(item, float(item.get("velocity_ms", 0.0) or 0.0))
+            if normalized_speed > 0.0:
+                normalized_speed_samples.append(normalized_speed)
 
         if tracked:
             tracker_results.extend(strip_tracker_debug_fields(tracked))
@@ -166,6 +179,7 @@ def benchmark_video(args: argparse.Namespace) -> dict[str, Any]:
                 "minimum_matching_threshold": args.matching_threshold,
                 "with_reid": args.with_reid,
                 "with_gmc": not args.no_gmc,
+                "reid_interval": args.reid_interval,
             },
             "event": {
                 "event_interval_frames": args.event_interval,
@@ -195,6 +209,7 @@ def benchmark_video(args: argparse.Namespace) -> dict[str, Any]:
                 "total_spatial_relations": sum(item["spatial_relation_count"] for item in events),
             },
             "kg": graph.stats,
+            "motion": summarize_speed_levels(normalized_speed_samples),
         },
         "events": events,
         "entities": profiles.to_entities(),
@@ -216,6 +231,23 @@ def summarize_event(event: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def summarize_speed_levels(samples: list[float]) -> dict[str, Any]:
+    normalizer = VelocityNormalizer()
+    normalizer.observe_batch(samples)
+    counts = Counter(
+        SPEED_LEVEL_LABELS[classify_normalized_speed(float(sample), normalizer)]
+        for sample in samples
+    )
+    return {
+        "sample_count": len(samples),
+        "distribution": {
+            label: counts.get(label, 0)
+            for label in SPEED_LEVEL_LABELS.values()
+            if label != "未知"
+        },
+    }
+
+
 def print_summary(result: dict[str, Any]) -> None:
     video = result["video"]
     run = result["run"]
@@ -223,6 +255,7 @@ def print_summary(result: dict[str, Any]) -> None:
     entities = result["metrics"]["entities"]
     events = result["metrics"]["events"]
     kg = result["metrics"]["kg"]
+    motion = result["metrics"].get("motion", {"sample_count": 0, "distribution": {}})
     params = result["parameters"]
 
     print("\nBenchmark Summary")
@@ -246,6 +279,7 @@ def print_summary(result: dict[str, Any]) -> None:
         ("matching_threshold", params["tracker"]["minimum_matching_threshold"]),
         ("with_reid", params["tracker"]["with_reid"]),
         ("with_gmc", params["tracker"]["with_gmc"]),
+        ("reid_interval", params["tracker"].get("reid_interval", 1)),
         ("entity_auto", params["entity"]["auto_merge_threshold"]),
         ("entity_tentative", params["entity"]["tentative_threshold"]),
         ("promotion_obs", params["entity"]["promotion_min_observations"]),
@@ -263,6 +297,8 @@ def print_summary(result: dict[str, Any]) -> None:
         ("entity_count", entities["entity_count"]),
         ("event_count", events["event_count"]),
         ("interacts_with_edges", kg["edge_types"].get("interacts_with", 0)),
+        ("speed_samples", motion.get("sample_count", 0)),
+        ("speed_levels", json.dumps(motion.get("distribution", {}), ensure_ascii=False, sort_keys=True)),
     ])
 
 
@@ -309,6 +345,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--lost-buffer", type=int, default=120)
     parser.add_argument("--matching-threshold", type=float, default=0.65)
     parser.add_argument("--with-reid", action="store_true", help="启用 tracker 内置 ReID")
+    parser.add_argument("--reid-interval", type=int, default=1, help="每隔多少帧刷新一次 ReID 特征")
     parser.add_argument("--no-gmc", action="store_true", help="关闭相机运动补偿")
     parser.add_argument("--entity-debug", action="store_true", help="在 JSON 中写入 Entity 融合候选评分日志")
     parser.add_argument("--entity-auto-threshold", type=float, default=0.72, help="Entity 自动合并阈值")

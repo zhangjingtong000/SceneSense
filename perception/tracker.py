@@ -128,11 +128,14 @@ class ReIDExtractor:
 
     def __init__(self, device='cpu'):
         self.device = device
+        self.use_half = str(device).startswith('cuda')
         from torchvision.models import ResNet18_Weights
         backbone = resnet18(weights=ResNet18_Weights.IMAGENET1K_V1)
         # Use layers up to avgpool (before fc)
         self.model = create_feature_extractor(backbone, {'avgpool': 'feat'})
         self.model.to(device)
+        if self.use_half:
+            self.model.half()
         self.model.eval()
         self._transform = T.Compose([
             T.ToPILImage(),
@@ -159,7 +162,9 @@ class ReIDExtractor:
                 valid_idx.append(i)
         if not crops:
             return np.tile(self._dummy.numpy(), (len(bboxes), 1))
-        batch = torch.stack(crops).to(self.device)
+        batch = torch.stack(crops).to(self.device, non_blocking=True)
+        if self.use_half:
+            batch = batch.half()
         feats = self.model(batch)['feat'].squeeze(-1).squeeze(-1)
         feats = torch.nn.functional.normalize(feats, p=2, dim=1)
         # Fill dummy features for invalid bboxes
@@ -220,7 +225,7 @@ class Track:
 
         # ReID features
         self.smooth_feat = feature
-        self.features = deque([feature], maxlen=50)
+        self.features = deque([feature] if feature is not None else [], maxlen=50)
         self._feature_alpha = 0.9
 
         # Trajectory
@@ -272,9 +277,9 @@ class Track:
         self.score = score
         self.last_seen = frame_idx
         self.time_since_update = 0
+        self.hits += 1
         if self.state == 'tentative' and self.hits >= self._min_hits_to_confirm:
             self.state = 'confirmed'
-        self.hits += 1
         # Update trajectory
         self._centroid = [cx, cy]
         self._bbox_xyxy = [cx - w/2, cy - h/2, cx + w/2, cy + h/2]
@@ -289,6 +294,8 @@ class Track:
             self.trajectory = self.trajectory[-90:]
 
     def update_features(self, feat):
+        if feat is None:
+            return
         feat = feat / (np.linalg.norm(feat) + 1e-10)
         if self.smooth_feat is None:
             self.smooth_feat = feat
@@ -376,6 +383,7 @@ class MultiObjectTracker:
         with_reid: bool = True,
         with_gmc: bool = True,
         gmc_method: str = 'sparseOptFlow',
+        reid_interval: int = 1,
     ):
         self.track_high_thresh = 0.5
         self.track_low_thresh = max(0.08, track_activation_threshold - 0.15)
@@ -393,6 +401,7 @@ class MultiObjectTracker:
         self._frame_rate = frame_rate
         self._with_reid = with_reid
         self._with_gmc = with_gmc
+        self.reid_interval = max(1, int(reid_interval))
 
         if with_reid:
             self.reid = ReIDExtractor(device=reid_device)
@@ -444,11 +453,16 @@ class MultiObjectTracker:
         class_names = [d.get('class', 'person') for d in detections]
 
         # ReID features
-        if self._with_reid and frame is not None and self.reid is not None:
+        refresh_reid = (
+            self._with_reid
+            and frame is not None
+            and self.reid is not None
+            and frame_idx % self.reid_interval == 0
+        )
+        if refresh_reid:
             features = self.reid.extract(frame, bboxes_xyxy)
         else:
-            features = np.random.randn(len(detections), 512).astype(np.float32)
-            features = features / (np.linalg.norm(features, axis=1, keepdims=True) + 1e-10)
+            features = np.zeros((len(detections), 512), dtype=np.float32)
 
         # GMC
         warp = np.eye(2, 3, dtype=np.float32)
@@ -478,12 +492,19 @@ class MultiObjectTracker:
             high_boxes = bboxes_xyxy[high_idx]
             high_sc = scores[high_idx]
             high_ft = features[high_idx]
-            dists = self._combined_distance(stage1_tracks, high_boxes, high_sc, high_ft)
+            dists = self._combined_distance(
+                stage1_tracks,
+                high_boxes,
+                high_sc,
+                high_ft,
+                use_appearance=refresh_reid,
+            )
             matches, u_tracks, u_dets = self._match(dists)
             for ti, di in matches:
                 track = stage1_tracks[ti]
                 det_i = high_idx[di]
-                track.update(bboxes_xyxy[det_i], scores[det_i], features[det_i],
+                track.update(bboxes_xyxy[det_i], scores[det_i],
+                             features[det_i] if refresh_reid else None,
                              frame_idx, timestamp)
                 track.state = 'confirmed'
                 assigned_dets.add(det_i)
@@ -507,7 +528,8 @@ class MultiObjectTracker:
             for ti, di in matches:
                 det_i = low_idx[di]
                 stage2_tracks[ti].update(bboxes_xyxy[det_i], scores[det_i],
-                                         features[det_i], frame_idx, timestamp)
+                                         features[det_i] if refresh_reid else None,
+                                         frame_idx, timestamp)
                 assigned_dets.add(det_i)
             # Unmatched → lost
             for ti in u_tracks:
@@ -535,7 +557,8 @@ class MultiObjectTracker:
             for ti, di in matches:
                 det_i = unassigned_high[di]
                 unconfirmed[ti].update(bboxes_xyxy[det_i], scores[det_i],
-                                       features[det_i], frame_idx, timestamp)
+                                       features[det_i] if refresh_reid else None,
+                                       frame_idx, timestamp)
                 assigned_dets.add(det_i)
             for ti in u_unconf:
                 t = unconfirmed[ti]
@@ -552,7 +575,8 @@ class MultiObjectTracker:
         for det_i in final_unassigned:
             if scores[det_i] >= self.new_track_thresh:
                 track = Track(bboxes_xyxy[det_i], scores[det_i],
-                              features[det_i], frame_idx, timestamp)
+                              features[det_i] if refresh_reid else None,
+                              frame_idx, timestamp)
                 self.tracked_tracks.append(track)
 
         # ── Step 5: Prune ──
@@ -561,13 +585,13 @@ class MultiObjectTracker:
         # ── Build output ──
         return self._build_output(timestamp, class_names, detections, frame_idx)
 
-    def _combined_distance(self, tracks, dets_xyxy, det_scores, det_feats):
+    def _combined_distance(self, tracks, dets_xyxy, det_scores, det_feats, use_appearance=True):
         """Compute combined IoU + ReID distance matrix."""
         if not tracks or len(dets_xyxy) == 0:
             return np.empty((len(tracks), len(dets_xyxy)))
 
         iou_dist = self._iou_distance(tracks, dets_xyxy)
-        if self._with_reid and det_feats.shape[1] == 512:
+        if self._with_reid and use_appearance and det_feats.shape[1] == 512:
             emb_dist = self._embedding_distance(tracks, det_feats)
             emb_dist[emb_dist > self.appearance_thresh] = 1.0
             iou_mask = iou_dist > self.proximity_thresh
@@ -584,7 +608,10 @@ class MultiObjectTracker:
 
     def _embedding_distance(self, tracks, det_feats):
         """Cosine distance matrix (0=identical, 1=orthogonal)."""
-        track_feats = np.array([t.smooth_feat for t in tracks])
+        track_feats = np.array([
+            t.smooth_feat if t.smooth_feat is not None else np.zeros(det_feats.shape[1], dtype=np.float32)
+            for t in tracks
+        ])
         # Cosine similarity
         sim = track_feats @ det_feats.T
         return (1.0 - sim) / 2.0
