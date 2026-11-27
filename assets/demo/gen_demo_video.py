@@ -17,6 +17,7 @@ import numpy as np
 W, H, FPS = 1280, 720, 25
 SECONDS = 8.0
 N = int(FPS * SECONDS)
+PERSON_HEIGHT = 200.0  # 画出来的行人身高（px）
 
 FLOOR_Y = 380  # 地平线
 SKIN = (176, 200, 224)
@@ -65,7 +66,7 @@ def draw_person(frame, cx, foot_y, shirt, trousers, phase):
 
     cx, foot_y 为脚底中心；phase 是步态相位（弧度）。
     """
-    height = 200.0
+    height = PERSON_HEIGHT
     u = height / 8.0
     top = foot_y - height
     head_ry = u * 0.52
@@ -119,6 +120,54 @@ def lerp(a, b, t):
     return a + (b - a) * t
 
 
+def actors_at(t: float) -> list[tuple[int, int, int, tuple, tuple, float]]:
+    """返回 t 时刻画面中的人物：``(person_id, cx, foot_y, 上衣色, 裤子色, 步态相位)``。
+
+    ``person_id`` 固定 1–4，和 README、评估脚本里的 P1–P4 对应。轨迹定义只在这里
+    出现一次，视频渲染和评估用的合成 GT 都从它取，避免两份数字各走各的。
+    """
+    actors: list[tuple[int, int, int, tuple, tuple, float]] = []
+
+    # P1 红：左 → 右横穿，速度≈1.3 m/s 的视觉等价
+    p1x = lerp(110, 1170, t / SECONDS)
+    actors.append((1, int(p1x), 620, (52, 52, 214), (62, 62, 120), t * 7.5))
+
+    # P2 绿：右 → 左，t≈3.2s 时与 P1 在画面中部重叠
+    p2x = lerp(1150, 190, t / SECONDS)
+    actors.append((2, int(p2x), 650, (64, 188, 74), (56, 64, 72), t * 7.5 + 1.0))
+
+    # P3 蓝：中部低速徘徊（前后来回，振幅 90px）→ loitering
+    p3x = 640 + np.sin(t * 1.9) * 90
+    actors.append((3, int(p3x), 672, (212, 128, 44), (58, 44, 36), t * 3.0))
+
+    # P4 黄：t<2s 在画面内 → 走出右侧 → t>5.5s 走回来
+    if t < 2.0:
+        p4x = lerp(900, 1300, t / 2.0)
+        p4_phase = t * 7.5
+    elif t < 5.5:
+        p4x = 1330.0  # 画面外
+        p4_phase = 0.0
+    else:
+        p4x = lerp(1300, 1010, (t - 5.5) / 2.5)
+        p4_phase = (t - 5.5) * 7.5
+    if p4x < W + 25:
+        actors.append((4, int(p4x), 600, (44, 208, 236), (66, 58, 44), p4_phase))
+
+    return actors
+
+
+def person_bbox(cx: int, foot_y: int) -> tuple[float, float, float, float]:
+    """按 ``draw_person`` 的绘制尺寸给出人物外接框 ``(x1, y1, x2, y2)``。
+
+    高度固定 ``PERSON_HEIGHT``；宽度取 1.5u（u = 身高/8），覆盖躯干、摆动的手臂和
+    脚掌。``evaluation/make_synthetic_gt.py`` 用它把合成场景变成"完美检测"结果。
+    """
+    u = PERSON_HEIGHT / 8.0
+    half_w = u * 1.5
+    top = foot_y - PERSON_HEIGHT
+    return (float(cx) - half_w, float(top), float(cx) + half_w, float(foot_y))
+
+
 def main(out_path: str) -> None:
     bg = make_background()
     vw = cv2.VideoWriter(out_path, cv2.VideoWriter_fourcc(*"mp4v"), FPS, (W, H))
@@ -127,35 +176,9 @@ def main(out_path: str) -> None:
     for i in range(N):
         t = i / FPS
         frame = bg.copy()
-        actors = []  # (x, 脚底 y, 上衣, 裤子, 步态相位)
-
-        # P1 红：左 → 右横穿，速度≈1.3 m/s 的视觉等价
-        p1x = lerp(110, 1170, t / SECONDS)
-        actors.append((int(p1x), 620, (52, 52, 214), (62, 62, 120), t * 7.5))
-
-        # P2 绿：右 → 左，t≈3.2s 时与 P1 在画面中部重叠
-        p2x = lerp(1150, 190, t / SECONDS)
-        actors.append((int(p2x), 650, (64, 188, 74), (56, 64, 72), t * 7.5 + 1.0))
-
-        # P3 蓝：中部低速徘徊（前后来回，振幅 90px）→ loitering
-        p3x = 640 + np.sin(t * 1.9) * 90
-        actors.append((int(p3x), 672, (212, 128, 44), (58, 44, 36), t * 3.0))
-
-        # P4 黄：t<2s 在画面内 → 走出右侧 → t>5.5s 走回来
-        if t < 2.0:
-            p4x = lerp(900, 1300, t / 2.0)
-            p4_phase = t * 7.5
-        elif t < 5.5:
-            p4x = 1330.0  # 画面外
-            p4_phase = 0.0
-        else:
-            p4x = lerp(1300, 1010, (t - 5.5) / 2.5)
-            p4_phase = (t - 5.5) * 7.5
-        if p4x < W + 25:
-            actors.append((int(p4x), 600, (44, 208, 236), (66, 58, 44), p4_phase))
 
         # 脚底 y 小的（远处）先画，保证近处的人盖住远处的人
-        for cx, foot_y, shirt, trousers, phase in sorted(actors, key=lambda a: a[1]):
+        for _, cx, foot_y, shirt, trousers, phase in sorted(actors_at(t), key=lambda a: a[2]):
             if -80 < cx < W + 80:
                 draw_person(frame, cx, foot_y, shirt, trousers, phase)
 

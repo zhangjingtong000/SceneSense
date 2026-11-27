@@ -19,6 +19,7 @@ from .gates import (
 )
 from .matcher import DEFAULT_IOU_THRESHOLD
 from .mot17_gt import load_gt
+from . import mot_metrics as mot_std
 
 SCHEMA_VERSION = "scenesense-gate-report-v1"
 
@@ -117,8 +118,15 @@ def run_evaluation(
     min_gap_frames: int = 5,
     config: dict[str, Any] | None = None,
     environment: Mapping[str, Any] | None = None,
+    mot_gt_path: str | Path | None = None,
+    mot_iou_threshold: float = DEFAULT_IOU_THRESHOLD,
 ) -> dict[str, Any]:
-    """执行一次完整评估，返回报告字典。"""
+    """执行一次完整评估，返回报告字典。
+
+    ``mot_gt_path`` 非空时额外算一份标准 MOT 指标（IDF1 / MOTA / HOTA），
+    走 MOTChallenge 口径：全部 GT 参与、匈牙利匹配，和上面自建 gate 的口径不同，
+    所以单独放在报告的 ``mot_standard`` 一栏，不参与 gate 判定。
+    """
     gt_by_frame = load_gt(gt_path, frame_count=frame_count, image_size=image_size)
     pred_by_frame = load_predictions(predictions_path)
     env_meta = dict(environment) if environment is not None else load_predictions_meta(predictions_path)
@@ -153,7 +161,18 @@ def run_evaluation(
     core_frames = sum(1 for boxes in gt_by_frame.values() for b in boxes if b.is_core)
     challenge_frames = sum(1 for boxes in gt_by_frame.values() for b in boxes if not b.is_core)
 
-    return {
+    mot_standard = None
+    if mot_gt_path is not None:
+        gt_boxes = mot_std.load_mot_gt(mot_gt_path, frame_offset=-1)
+        pred_boxes = mot_std.load_predictions_any(predictions_path)
+        if frame_count > 0:
+            gt_boxes = {f: b for f, b in gt_boxes.items() if f < frame_count}
+            pred_boxes = {f: b for f, b in pred_boxes.items() if f < frame_count}
+        mot_standard = mot_std.evaluate(gt_boxes, pred_boxes, iou_threshold=mot_iou_threshold)
+        mot_standard["gt_path"] = str(mot_gt_path)
+        mot_standard["pred_path"] = str(predictions_path)
+
+    report = {
         "schema_version": SCHEMA_VERSION,
         "generated_at": datetime.now().isoformat(timespec="seconds"),
         "code_revision": _git_revision(),
@@ -182,6 +201,9 @@ def run_evaluation(
             "all_passed": gate0["passed"] and gate1["passed"] and gate2["passed"],
         },
     }
+    if mot_standard is not None:
+        report["mot_standard"] = mot_standard
+    return report
 
 
 def format_report(report: dict[str, Any]) -> str:
@@ -225,7 +247,31 @@ def format_report(report: dict[str, Any]) -> str:
     m2 = g2["metrics"]
     lines.append(f"  错误合并={m2['false_merge_count']}  "
                  f"平均碎片数={m2['average_entity_fragmentation']}")
-    lines.append(f"  恢复率: 未执行标注（需 annotations/mot17_04/annotation.json）")
+
+    def _rate(value: Any) -> str:
+        return "n/a（该档没有可判定事件）" if value is None else f"{value:.2%}"
+
+    lines.append(
+        "  恢复率(0–2s / 2–10s / >10s): "
+        f"{_rate(m2.get('recovery_rate_short_gap'))} / "
+        f"{_rate(m2.get('recovery_rate_medium_gap'))} / "
+        f"{_rate(m2.get('recovery_rate_long_gap'))}"
+        f"  事件={m2.get('recovery_events', 0)}"
+    )
+    if report.get("mot_standard"):
+        mot = report["mot_standard"]
+
+        def _num(key: str) -> str:
+            value = mot.get(key)
+            return "n/a" if value is None else str(value)
+
+        lines.append("")
+        lines.append("[标准 MOT 指标（MOTChallenge 口径，不参与 gate 判定）]")
+        lines.append(f"  IDF1={_num('idf1')}  MOTA={_num('mota')}  HOTA={_num('hota')}  "
+                     f"(IoU 阈值 {mot.get('iou_threshold')})")
+        lines.append(f"  IDP={_num('idp')}  IDR={_num('idr')}  FP={_num('fp')}  "
+                     f"FN={_num('fn')}  IDSW={_num('idsw')}")
+        lines.append(f"  后端: {mot.get('backends')}")
     lines.append("")
     lines.append(f"总体: {'通过' if report['summary']['all_passed'] else '未通过'}")
     lines.append("=" * 62)

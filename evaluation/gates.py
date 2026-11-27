@@ -8,8 +8,10 @@
 - 错误合并：同一帧内两个不同 GT 人物匹配到同一 Entity 的次数。
 - 碎片数：每个 GT 人物对应过的不同 Entity 数（平均）。
 
-恢复率（Gate 2 的 95% / 80%）依赖人工连续性标注，本模块只报告
-``recovery_rate: None`` 并在 ``notes`` 中说明原因。
+恢复率（Gate 2 的 95% / 80%）由 GT 的 ``person_id`` 在可见帧断口处自动计算
+（``compute_recovery_rates``），不需要人工标注；只有调用 ``gate2_continuity`` 时
+没传 ``gt_by_frame`` / ``pred_by_frame``，或某一档没有可判定的「消失—重现」事件，
+对应档位才返回 ``None``。
 """
 
 from __future__ import annotations

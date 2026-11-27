@@ -104,7 +104,7 @@ python pipeline.py --source your_video.mp4 --with-anomaly \
 python -m pytest -q
 ```
 
-实测 **84 passed**（Python 3.13 + pytest，本机完整依赖，两次运行 17.5s / 17.7s）。`tests/` 共 11 个文件，覆盖 tracker 配置、Entity 合并判定、事件序列化、KG 连续性写入、gate 指标、Web 前端契约。
+实测 **100 passed**（Python 3.13 + pytest，本机完整依赖）。`tests/` 共 12 个文件，覆盖 tracker 配置、Entity 合并判定、事件序列化、KG 连续性写入、gate 指标、标准 MOT 指标适配器（自检）与 Web 前端契约。
 
 ## 技术栈
 
@@ -119,10 +119,10 @@ python -m pytest -q
 
 ## 已知限制
 
-- **没有标准 MOT 指标**。没有跑出 IDF1 / MOTA / HOTA。`evaluation/` 是自建 gate 体系：帧级召回/精度（各 0.90 门槛）、人物发现率、最长连续漏检（10 帧）、错误合并次数、碎片数；`recovery_rate` 依赖人工连续性标注，当前显式返回 `None`。要标准指标需自备 MOT17，并用 py-motmetrics 或 TrackEval 重跑。
+- **标准 MOT 指标要自备数据集**。已提供 `evaluation/mot_metrics.py`：给它一份预测文件（MOTChallenge `txt` 或 `scripts/export_predictions.py` 的 JSONL）和 MOT17 `gt.txt`，就算得出 IDF1 / MOTA / IDP / IDR / FP / FN / IDSW（py-motmetrics）与 HOTA / DetA / AssA（TrackEval；`pip install --no-deps trackeval`，它的 numpy 版本声明会拉起 2.5+，和本机 numba 的 `numpy<2.5` 打架）；`python scripts/run_gate.py … --mot-gt <gt.txt>` 会在 gate 报告里追加这一节（不参与 gate 判定）。**仓库不附带 MOT17 数据集**（许可 + 体积），需自行下载，所以这些数字**没有在真实 MOT17 上跑过**；仓库里只做了适配器自检——拿合成示例视频的"完美 GT"（预测即 GT）跑通链路，得到 IDF1 = 1.0 / MOTA = 1.0 / HOTA = 1.0，**这不是真实评测结果**。自建 gate 体系照旧：帧级召回/精度（各 0.90 门槛）、人物发现率、最长连续漏检（10 帧）、错误合并次数、碎片数；`recovery_rate` 由 GT 的 `person_id` 在可见帧断口处**自动计算，无需人工标注**（`compute_recovery_rates`），分 0–2 秒 / 2–10 秒 / >10 秒三档，`run_evaluation` 默认就会传入 `gt_by_frame` / `pred_by_frame`。该值为 `None` 只有两种情形：直接调用 `gate2_continuity` 时未传 GT，或某一档没有可判定的「消失—重现」事件（分母为 0）。
 - **没有 TURN、没有做实时流**。逐帧离线处理，Web 端是 WebSocket 推进度 + base64 帧，不是 WebRTC，前端拿不到低延迟视频。
 - **单相机**。没有跨相机 ReID，多路视频只能各自建图。
 - **只有 legacy 前端**。`web/frontend` 是可用版本；未完成的 `frontend-v2` 脚手架未包含在本次发布中。
 - **OSNet 权重不入库**，缺失时回退 ResNet18，日志会打印 `[ReID] BoxMOT 不可用（…），回退 ResNet18`，ID 连续性会变差。
 - **依赖在线 LLM**。Agent 层需要 DeepSeek API，`--dry-run` 不依赖。
-- **实验脚本未整理**。`scripts/` 里多数是一次性入口，参数依赖本机 GPU 与绝对路径。
+- **实验脚本未整理**。`scripts/run_gate.py` 是评估的正式入口（见 `docs/evaluation.md`）；另几个是实验期的一次性脚本（`export_predictions.py`、`export_predictions_pipelined.py`、`build_full_eval.py`、`run_mot_sequences.py`、`benchmark_video.py`、`visualize_kg.py`）。源码里没有硬编码的绝对路径，输入路径与设备都走参数（`--video`、`--device`，默认 `auto`）。

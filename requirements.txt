@@ -25,5 +25,11 @@ openai>=1.0               # DeepSeek（OpenAI 兼容接口）
 # Pillow>=10.0
 # requests>=2.31
 
+# ---- 可选：标准 MOT 指标（evaluation/mot_metrics.py）----
+# motmetrics>=1.4         # IDF1 / MOTA / IDP / IDR；缺失时这些字段为 None
+# trackeval>=1.3          # HOTA；缺失时 hota 字段为 None。注意它的 numpy 声明会
+#                         #  把 numpy 拉到 2.5+，装时用 `pip install --no-deps trackeval`
+#                         #  避免和本机 numba/paddlex 之类的 numpy<2.5 约束打架
+
 # ---- 开发 / 测试 ----
 pytest>=7.4

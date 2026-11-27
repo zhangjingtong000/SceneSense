@@ -1,4 +1,4 @@
-﻿"""一条命令生成感知 Gate 报告。
+"""一条命令生成感知 Gate 报告。
 
 用法::
 
@@ -9,6 +9,12 @@
     # 先导出预测再评估
     python scripts/run_gate.py --video test_data/mot17_04_raw.mp4 \
         --model yolov8l.pt --conf 0.15 --imgsz 960 --export \
+        --out outputs/gate/mot17_04.json
+
+    # 同时输出标准 MOT 指标（IDF1 / MOTA / HOTA）
+    python scripts/run_gate.py --video test_data/mot17_04_raw.mp4 \
+        --predictions outputs/pred/mot17_04.jsonl \
+        --mot-gt MOT17/train/MOT17-04-FRCNN/gt/gt.txt \
         --out outputs/gate/mot17_04.json
 """
 
@@ -69,6 +75,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--frame-count", type=int, default=0, help="覆盖视频帧数")
     parser.add_argument("--out", required=True, help="报告 JSON 输出路径")
     parser.add_argument("--baseline", default="", help="baseline.json，用于碎片数相对判定")
+    parser.add_argument(
+        "--mot-gt",
+        default="",
+        help="MOT17 gt.txt 路径；给了就额外算标准 MOT 指标（IDF1/MOTA/HOTA）。"
+             "通常和 --gt 是同一个文件，但要显式指定才会算。",
+    )
+    parser.add_argument("--mot-iou", type=float, default=0.5, help="标准 MOT 指标的匹配 IoU 阈值")
     return parser
 
 
@@ -102,6 +115,10 @@ def main() -> None:
     gt_path = Path(args.gt) if args.gt else resolve_gt(video)
     if not gt_path.exists():
         raise SystemExit(f"真值不存在: {gt_path}")
+
+    mot_gt_path = Path(args.mot_gt) if args.mot_gt else None
+    if mot_gt_path is not None and not mot_gt_path.exists():
+        raise SystemExit(f"标准 MOT 真值不存在: {mot_gt_path}")
 
     meta = resolve_meta(video)
     frame_count = args.frame_count or meta["frame_count"]
@@ -146,6 +163,8 @@ def main() -> None:
         baseline_fragmentation=baseline_fragmentation,
         config=config,
         environment=env_meta,
+        mot_gt_path=mot_gt_path,
+        mot_iou_threshold=args.mot_iou,
     )
 
     out_path = Path(args.out)
