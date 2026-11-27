@@ -98,13 +98,92 @@ python pipeline.py --source your_video.mp4 --with-anomaly \
 
 **Web 演示**：先取消 `requirements.txt` 里 Web 段的注释并安装，然后 `python -m uvicorn web.backend.main:app --port 8000`，打开 `http://127.0.0.1:8000`。
 
+## 指标怎么用（MOT）
+
+`evaluation/mot_metrics.py` 按 MOTChallenge 口径算 IDF1 / MOTA / IDP / IDR / FP / FN / IDSW（py-motmetrics）与 HOTA / DetA / AssA（TrackEval）。输入是两个文件：`gt.txt` 是 `frame,id,x,y,w,h,mark,class,visibility`（1 基帧号），预测是 `frame,id,x,y,w,h,conf`（0 基帧号）或 `scripts/export_predictions.py` 导出的 JSONL，坐标都是左上角 + 宽高。`--gt-frame-offset -1` 是默认值，正好把 MOT17 的 1 基 GT 对到 0 基预测，数据文件不是这套约定时才需要改。两个后端各自可选：`pip install motmetrics` 给 IDF1 / MOTA，`pip install --no-deps trackeval` 给 HOTA；缺哪个，对应字段就是 `None` 并在 `backends` 里写明原因，另一个照常算。
+
+下面分两层：**真实序列实测**给出真实量级的数字，**合成数据回归**证明指标有判别力。
+
+### 真实序列实测（MOT17 train，7 个序列）
+
+用项目自己的跟踪输出（`scripts/run_mot_sequences.py` 导出的 JSONL）在 MOT17 train 的 7 个序列上跑，单序列 3–4 秒：
+
+| 序列 | 帧数 | GT 框 | IDF1 | MOTA | HOTA | IDP | IDR | FP | FN | IDSW |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| MOT17-02 | 600 | 18581 | 0.2626 | 0.1271 | 0.2125 | 0.769 | 0.158 | 725 | 15482 | 12 |
+| MOT17-04 | 1050 | 47557 | 0.2775 | 0.1491 | 0.2085 | 0.824 | 0.167 | 1261 | 39189 | 15 |
+| MOT17-05 | 837 | 6917 | 0.1269 | **-0.0387** | 0.1601 | 0.370 | 0.077 | 841 | 6324 | 20 |
+| MOT17-09 | 525 | 5325 | 0.3933 | 0.2368 | 0.2972 | 0.567 | 0.301 | 774 | 3268 | 22 |
+| MOT17-10 | 654 | 12839 | 0.2688 | 0.0822 | 0.2171 | 0.515 | 0.182 | 1716 | 10015 | 53 |
+| MOT17-11 | 900 | 9436 | 0.3131 | 0.1417 | 0.2771 | 0.685 | 0.203 | 728 | 7368 | 3 |
+| MOT17-13 | 750 | 11642 | 0.2139 | 0.0429 | 0.2048 | 0.512 | 0.135 | 1279 | 9846 | 18 |
+| 按 GT 框加权 | 5316 | 112297 | 0.2667 | 0.1188 | 0.2168 | 0.695 | 0.168 | 7324 | 91492 | 143 |
+
+三点必须说清：
+
+- **这是逐序列单独算的结果，不是官方 MOTChallenge 提交成绩。** 官方用多序列聚合、以 test 集为准（test 集不公开 GT），这里只是把适配器在真实数据上跑通并给量级。
+- **召回低是跟踪器的真实表现，不是指标算错。** IDP 0.70 尚可，IDR 只有 0.17，说明喂给跟踪器的检测太少；MOT17-05 的 MOTA 为负，是因为 841 个 FP 相对 6917 个 GT 太多——MOTA 本就可以为负。
+- 这组数字和下面合成数据的 1.0 放在一起，正是「自测满分 ≠ 真实性能」的证据。
+
+复现需要 GPU 和 MOT17 数据集（预测文件不入库：实验产物 + 体积）：
+
+```bash
+python scripts/run_mot_sequences.py --root MOT17/train --pattern "MOT17-*-FRCNN" --limit 7
+python -m evaluation.mot_metrics \
+  --gt MOT17/train/MOT17-04-FRCNN/gt/gt.txt \
+  --pred outputs/mot_sequences/MOT17-04-FRCNN.pred.jsonl
+```
+
+### 合成数据回归（`evaluation/demo_data/`）
+
+这层不关心真实性能，只管指标算得对不对。`evaluation/demo_data/` 是 200 帧 / 6 目标 / 1200 个 GT 框的**合成**序列（由 `evaluation/make_demo_sequence.py` 生成，219 KB），clone 下来就能跑：
+
+```bash
+python -m evaluation.mot_metrics \
+  --gt evaluation/demo_data/gt.txt \
+  --pred evaluation/demo_data/idsw.txt --out outputs/mot/idsw.json
+```
+
+输出：
+
+```text
+IDF1=0.825  MOTA=0.9967  HOTA=0.8723  (DetA=1.0  AssA=0.7608)
+IDP=0.825  IDR=0.825  FP=0  FN=0  IDSW=4
+GT 框=1200  预测框=1200  帧数=200  IoU 阈值=0.5
+后端: {'mota_idf1': 'motmetrics 1.4.0', 'hota': 'trackeval 1.3.0'}
+```
+
+三个预测文件取自**同一份 GT**，差别只在跟踪错误，所以数字的差异就是指标在反映这些错误：
+
+| 预测文件 | 造了什么错 | IDF1 | MOTA | HOTA | IDSW | FN | FP |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `perfect.txt` | 无，与 GT 逐框一致 | 1.000 | 1.000 | 1.000 | 0 | 0 | 0 |
+| `idsw.txt` | 2、4 号各换 1 次 ID，6 号换 2 次 | 0.825 | 0.9967 | 0.8723 | 4 | 0 | 0 |
+| `dropout.txt` | 1 号漏 30 帧、5 号漏 50 帧、3 号每 7 帧漏 1 帧 | 0.9524 | 0.9092 | 0.8651 | 0 | 109 | 0 |
+
+读法：
+
+- `idsw.txt` 的框一个没错，`FP` / `FN` 都是 0，但 `IDF1` 从 1.0 掉到 0.825、`IDSW` 计到 4——这正是 ID 跳变对关联指标的惩罚。
+- `dropout.txt` 没有换 ID（`IDSW=0`），但 `FN` 到 109、`IDR` 掉到 0.9092——漏检只伤召回。
+- `HOTA` 两种错误都会压：`idsw` 的 `AssA=0.7608`，`dropout` 的 `DetA=0.8597`。
+
+**这一层是合成数据的演示，只证明适配器能把「好」和「坏」分开**（`tests/evaluation/test_mot_metrics.py::TestDemoSequence` 把这些关系固化成断言，指标算错会让测试红），不代表任何真实跟踪性能——真实数字看上面那张 MOT17 表。
+
+重新生成演示数据（`--report` 顺带打印上表）：
+
+```bash
+python -m evaluation.make_demo_sequence --report
+```
+
+改了生成器要重跑这一步——`TestDemoSequence` 会检查 `demo_data/` 与生成器输出逐字节一致。
+
 ## 测试
 
 ```bash
 python -m pytest -q
 ```
 
-实测 **100 passed**（Python 3.13 + pytest，本机完整依赖）。`tests/` 共 12 个文件，覆盖 tracker 配置、Entity 合并判定、事件序列化、KG 连续性写入、gate 指标、标准 MOT 指标适配器（自检）与 Web 前端契约。
+实测 **108 passed**（Python 3.13 + pytest，本机完整依赖）。`tests/` 共 12 个文件，覆盖 tracker 配置、Entity 合并判定、事件序列化、KG 连续性写入、gate 指标、标准 MOT 指标适配器（满分自检 + 合成序列的判别力比对）与 Web 前端契约。`TestDemoSequence` 用 `evaluation/demo_data/` 的三组预测守住 IDF1 / IDSW / FN 的方向，改坏 `mot_metrics.py` 的匹配或计数会直接红。
 
 ## 技术栈
 
@@ -119,7 +198,7 @@ python -m pytest -q
 
 ## 已知限制
 
-- **标准 MOT 指标要自备数据集**。已提供 `evaluation/mot_metrics.py`：给它一份预测文件（MOTChallenge `txt` 或 `scripts/export_predictions.py` 的 JSONL）和 MOT17 `gt.txt`，就算得出 IDF1 / MOTA / IDP / IDR / FP / FN / IDSW（py-motmetrics）与 HOTA / DetA / AssA（TrackEval；`pip install --no-deps trackeval`，它的 numpy 版本声明会拉起 2.5+，和本机 numba 的 `numpy<2.5` 打架）；`python scripts/run_gate.py … --mot-gt <gt.txt>` 会在 gate 报告里追加这一节（不参与 gate 判定）。**仓库不附带 MOT17 数据集**（许可 + 体积），需自行下载，所以这些数字**没有在真实 MOT17 上跑过**；仓库里只做了适配器自检——拿合成示例视频的"完美 GT"（预测即 GT）跑通链路，得到 IDF1 = 1.0 / MOTA = 1.0 / HOTA = 1.0，**这不是真实评测结果**。自建 gate 体系照旧：帧级召回/精度（各 0.90 门槛）、人物发现率、最长连续漏检（10 帧）、错误合并次数、碎片数；`recovery_rate` 由 GT 的 `person_id` 在可见帧断口处**自动计算，无需人工标注**（`compute_recovery_rates`），分 0–2 秒 / 2–10 秒 / >10 秒三档，`run_evaluation` 默认就会传入 `gt_by_frame` / `pred_by_frame`。该值为 `None` 只有两种情形：直接调用 `gate2_continuity` 时未传 GT，或某一档没有可判定的「消失—重现」事件（分母为 0）。
+- **标准 MOT 指标要自备数据集**。已提供 `evaluation/mot_metrics.py`：给它一份预测文件（MOTChallenge `txt` 或 `scripts/export_predictions.py` 的 JSONL）和 MOT17 `gt.txt`，就算得出 IDF1 / MOTA / IDP / IDR / FP / FN / IDSW（py-motmetrics）与 HOTA / DetA / AssA（TrackEval；`pip install --no-deps trackeval`，它的 numpy 版本声明会拉起 2.5+，和本机 numba 的 `numpy<2.5` 打架）；`python scripts/run_gate.py … --mot-gt <gt.txt>` 会在 gate 报告里追加这一节（不参与 gate 判定）。**仓库不附带 MOT17 数据集**（许可 + 体积），需自行下载。**已在本机 MOT17 train 的 7 个序列上跑过真实评测**（逐序列单独算，IDF1 0.21–0.39、IDR 0.08–0.30，不是官方提交成绩，见「指标怎么用（MOT）」）；另有合成数据回归："完美 GT"（预测即 GT）自检得到 IDF1 = 1.0 / MOTA = 1.0 / HOTA = 1.0，加上 `evaluation/demo_data/` 里三种**有错误**的预测（IDF1 0.825 / 0.9524、IDSW 4、FN 109），用来证明指标确实区分跟踪质量。自建 gate 体系照旧：帧级召回/精度（各 0.90 门槛）、人物发现率、最长连续漏检（10 帧）、错误合并次数、碎片数；`recovery_rate` 由 GT 的 `person_id` 在可见帧断口处**自动计算，无需人工标注**（`compute_recovery_rates`），分 0–2 秒 / 2–10 秒 / >10 秒三档，`run_evaluation` 默认就会传入 `gt_by_frame` / `pred_by_frame`。该值为 `None` 只有两种情形：直接调用 `gate2_continuity` 时未传 GT，或某一档没有可判定的「消失—重现」事件（分母为 0）。
 - **没有 TURN、没有做实时流**。逐帧离线处理，Web 端是 WebSocket 推进度 + base64 帧，不是 WebRTC，前端拿不到低延迟视频。
 - **单相机**。没有跨相机 ReID，多路视频只能各自建图。
 - **只有 legacy 前端**。`web/frontend` 是可用版本；未完成的 `frontend-v2` 脚手架未包含在本次发布中。

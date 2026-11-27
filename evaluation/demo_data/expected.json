@@ -1,0 +1,65 @@
+{
+  "generated_by": "evaluation/make_demo_sequence.py",
+  "note": "合成数据的适配器演示，用来证明指标能区分跟踪质量，不代表真实跟踪性能；真实评测要下载 MOT17 数据集。",
+  "sequence": {
+    "frames": 200,
+    "fps": 25.0,
+    "frame_size": [
+      1280,
+      720
+    ],
+    "targets": 6,
+    "gt_detections": 1200,
+    "gt_frame_offset": -1,
+    "pred_frame_offset": 0,
+    "iou_threshold": 0.5
+  },
+  "scenarios": {
+    "perfect": {
+      "idf1": 1.0,
+      "mota": 1.0,
+      "hota": 1.0,
+      "deta": 1.0,
+      "assa": 1.0,
+      "idp": 1.0,
+      "idr": 1.0,
+      "fp": 0,
+      "fn": 0,
+      "idsw": 0,
+      "gt_detections": 1200,
+      "pred_detections": 1200
+    },
+    "idsw": {
+      "idf1": 0.825,
+      "mota": 0.9967,
+      "hota": 0.8723,
+      "deta": 1.0,
+      "assa": 0.7608,
+      "idp": 0.825,
+      "idr": 0.825,
+      "fp": 0,
+      "fn": 0,
+      "idsw": 4,
+      "gt_detections": 1200,
+      "pred_detections": 1200
+    },
+    "dropout": {
+      "idf1": 0.9524,
+      "mota": 0.9092,
+      "hota": 0.8651,
+      "deta": 0.8597,
+      "assa": 0.8705,
+      "idp": 1.0,
+      "idr": 0.9092,
+      "fp": 0,
+      "fn": 109,
+      "idsw": 0,
+      "gt_detections": 1200,
+      "pred_detections": 1091
+    }
+  },
+  "backends": {
+    "mota_idf1": "motmetrics 1.4.0",
+    "hota": "trackeval 1.3.0"
+  }
+}

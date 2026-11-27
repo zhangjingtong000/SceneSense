@@ -1,15 +1,19 @@
 """标准 MOT 指标适配器（``evaluation/mot_metrics.py``）的测试。
 
-只验三件事：
+验四件事：
 
 1. MOTChallenge 行格式的解析（mark/class 过滤、帧号偏移、xywh→xyxy、置信度过滤）。
 2. **适配器自检**：完美 GT（预测即 GT）下必须是 IDF1=1.0 / MOTA=1.0 / HOTA=1.0。
    这是链路自检，不是真实评测结果。
 3. 已知错误模式（ID 跳变、误检、漏检、只有预测的帧）必须被如实计入。
+4. **合成序列的判别力**（``evaluation/make_demo_sequence.py`` 的 200 帧 / 6 目标
+   数据）：同一份 GT 配三种预测，指标必须按缺陷类型分开。这组断言能抓住
+   "适配器把 IDSW 恒算 0 / 把 FN 恒算 0 / 把 IDF1 恒算 1" 这类回归。
 """
 
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 
@@ -18,7 +22,7 @@ import pytest
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(_REPO_ROOT))
 
-from evaluation import make_synthetic_gt  # noqa: E402
+from evaluation import make_demo_sequence, make_synthetic_gt  # noqa: E402
 from evaluation.mot_metrics import (  # noqa: E402
     Box,
     evaluate,
@@ -32,6 +36,15 @@ from evaluation.report import run_evaluation  # noqa: E402
 
 def _box(frame: int, track_id: int, bbox=(0.0, 0.0, 50.0, 100.0)) -> Box:
     return Box(frame=frame, track_id=track_id, bbox=tuple(float(v) for v in bbox))
+
+
+def _lf(data: bytes) -> bytes:
+    """把 CRLF 归一成 LF。
+
+    ``.gitattributes`` 给 ``*.txt`` / ``*.json`` 定了 ``eol=lf``，生成器也固定写
+    LF；这里归一化只是让"不同机器 checkout 出行尾不同"不至于误报，内容仍逐字节比。
+    """
+    return data.replace(b"\r\n", b"\n")
 
 
 class TestMotFormatParsing:
@@ -220,3 +233,114 @@ class TestReportWiring:
         args = build_parser().parse_args(["--video", "v.mp4", "--out", "o.json", "--mot-gt", "gt.txt"])
         assert args.mot_gt == "gt.txt"
         assert args.mot_iou == 0.5
+
+
+class TestDemoSequence:
+    """200 帧 / 6 目标合成序列上的指标**判别力**测试。
+
+    和上面的满分自检互补：``TestAdapterSelfCheck`` 只证明链路通（完美 GT 恒为
+    1.0，指标写死成 1.0 也能过），这里用同一份 ``gt.txt`` 配三种**有错误**的
+    预测，要求指标按缺陷类型分开。因此下面任何一条失败，都说明适配器算错了，
+    而不只是"数据变了"。
+
+    数字锚点与 ``evaluation/demo_data/expected.json`` 一致；改生成器要一并
+    重跑 ``python -m evaluation.make_demo_sequence``。
+    """
+
+    @pytest.fixture(scope="class")
+    def scenarios(self):
+        """三个场景各跑一遍文件往返（与用户命令行同一条路径），类内只算一次。"""
+        demo_dir = make_demo_sequence.DEMO_DATA_DIR
+        paths = {"gt": demo_dir / "gt.txt"}
+        for kind in make_demo_sequence.SCENARIOS:
+            paths[kind] = demo_dir / f"{kind}.txt"
+        missing = [str(p) for p in paths.values() if not p.exists()]
+        if missing:
+            pytest.skip(f"demo_data 缺失，先跑 make_demo_sequence：{missing}")
+        return make_demo_sequence.evaluate_demo(paths)
+
+    def test_demo_files_are_committed(self):
+        for name in ("gt.txt", "perfect.txt", "idsw.txt", "dropout.txt", "expected.json"):
+            assert (make_demo_sequence.DEMO_DATA_DIR / name).is_file(), name
+        # 用户要求体积控制在 1MB 内
+        total = sum(
+            p.stat().st_size for p in make_demo_sequence.DEMO_DATA_DIR.glob("*.txt")
+        )
+        assert total < 1024 * 1024
+
+    def test_demo_data_is_reproducible(self, tmp_path):
+        """重新生成必须与仓库里的文件一致——防止改了生成器忘了落数据。"""
+        make_demo_sequence.write_demo_data(tmp_path)
+        demo_dir = make_demo_sequence.DEMO_DATA_DIR
+        for name in ("gt.txt", "perfect.txt", "idsw.txt", "dropout.txt"):
+            assert _lf((tmp_path / name).read_bytes()) == _lf(
+                (demo_dir / name).read_bytes()
+            ), f"{name} 与生成器输出不一致，重跑 make_demo_sequence"
+
+    def test_perfect_scenario_scores_one(self, scenarios):
+        perfect = scenarios["perfect"]
+        assert perfect["idf1"] == pytest.approx(1.0, abs=1e-6)
+        assert perfect["mota"] == pytest.approx(1.0, abs=1e-6)
+        assert (perfect["fp"], perfect["fn"], perfect["idsw"]) == (0, 0, 0)
+        assert perfect["gt_detections"] == 200 * len(make_demo_sequence.TARGETS)
+
+    def test_idsw_lowers_idf1_and_counts_switches(self, scenarios):
+        perfect, idsw = scenarios["perfect"], scenarios["idsw"]
+
+        # 用户要的核心关系
+        assert idsw["idf1"] < perfect["idf1"]
+        assert idsw["idsw"] > 0
+        # 换 ID 不产生误检/漏检，只伤关联：IDP == IDR，FP == FN == 0
+        assert (idsw["fp"], idsw["fn"]) == (0, 0)
+        assert idsw["idp"] == pytest.approx(idsw["idr"])
+        # 2、4 号各换 1 次 + 6 号换 2 次 = 4 次
+        assert idsw["idsw"] == 4
+        # ID 全换掉的话 IDF1 会掉到 0.825；再高就不对劲了
+        assert idsw["idf1"] < 0.9
+        # 关联错误也要压低 HOTA 的 AssA
+        assert idsw["assa"] < perfect["assa"]
+
+    def test_dropout_raises_fn_and_lowers_recall(self, scenarios):
+        perfect, dropout = scenarios["perfect"], scenarios["dropout"]
+
+        # 用户要的核心关系
+        assert dropout["fn"] > perfect["fn"]
+        # 1 号漏 30 帧 + 5 号漏 50 帧 + 3 号每 7 帧漏 1 帧（29 帧）= 109
+        assert dropout["fn"] == 109
+        assert dropout["fp"] == 0  # 只漏不误
+        assert dropout["idsw"] == 0  # 没有换 ID
+        assert dropout["idr"] < perfect["idr"]
+        assert dropout["mota"] < perfect["mota"]
+        # MOTA = 1 - FN/GT 在这个无 FP 无 IDSW 的场景里成立
+        assert dropout["mota"] == pytest.approx(1.0 - dropout["fn"] / dropout["gt_detections"], abs=1e-3)
+
+    def test_three_scenarios_are_distinguishable(self, scenarios):
+        """三种预测必须给出三组可区分的数字，否则指标没有判别力。"""
+        perfect = scenarios["perfect"]
+        assert perfect["idf1"] > scenarios["idsw"]["idf1"]
+        assert perfect["idf1"] >= scenarios["dropout"]["idf1"]
+        assert scenarios["idsw"]["idsw"] > 0
+        assert scenarios["dropout"]["fn"] > 0
+        assert scenarios["idsw"] != scenarios["dropout"]
+
+    def test_expected_json_agrees_with_live_run(self, scenarios):
+        """提交的 expected.json 必须和现在算出来的一致（浮点留 0.02 余量）。"""
+        recorded = json.loads(
+            (make_demo_sequence.DEMO_DATA_DIR / "expected.json").read_text(encoding="utf-8")
+        )
+        assert recorded["scenarios"].keys() == set(make_demo_sequence.SCENARIOS)
+
+        for kind in make_demo_sequence.SCENARIOS:
+            live = scenarios[kind]
+            saved = recorded["scenarios"][kind]
+            for key in make_demo_sequence.METRIC_KEYS:
+                if live.get(key) is None or saved.get(key) is None:
+                    continue  # 后端没装时字段为 None，不参与比对
+                assert live[key] == pytest.approx(saved[key], abs=0.02), f"{kind}.{key}"
+
+    def test_demo_gt_and_predictions_align_by_default_offsets(self):
+        """文件按 1 基 GT / 0 基预测写，必须直接喂给 evaluate_files 的默认偏移。"""
+        demo_dir = make_demo_sequence.DEMO_DATA_DIR
+        result = evaluate_files(demo_dir / "gt.txt", demo_dir / "perfect.txt")
+        assert result["frames"] == make_demo_sequence.N_FRAMES
+        assert result["idf1"] == pytest.approx(1.0)
