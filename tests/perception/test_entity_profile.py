@@ -37,6 +37,8 @@ def test_high_confidence_new_track_merges_after_occlusion_gap():
 
 
 def test_close_short_gap_track_merges_without_appearance_feature_under_defaults():
+    # Without appearance features and short gap, be conservative — create new entity
+    # (prevents track stealing seen with Person-10 duplicate bug)
     mgr = EntityProfileManager()
     first = track(3, 10, 100, 100)
     second = track(17, 18, 104, 102)
@@ -46,14 +48,15 @@ def test_close_short_gap_track_merges_without_appearance_feature_under_defaults(
     mgr.update([first], frame_idx=10, timestamp=10 / 30.0)
     enriched = mgr.update([second], frame_idx=18, timestamp=18 / 30.0)
 
-    assert enriched[0]["entity_id"] == "Person-1"
-    assert mgr.get_profile("Person-1").track_ids == [3, 17]
+    assert enriched[0]["entity_id"] == "Person-2"  # conservative: no appearance → new entity
+    assert len(mgr.profiles()) == 2
 
 
 def test_low_confidence_new_track_becomes_tentative_candidate():
     mgr = EntityProfileManager(auto_merge_threshold=0.8, tentative_threshold=0.35)
     mgr.update([track(3, 10, 100, 100, [1.0, 0.0])], frame_idx=10, timestamp=10 / 30.0)
-    enriched = mgr.update([track(17, 18, 260, 240, [0.2, 0.98])], frame_idx=18, timestamp=18 / 30.0)
+    # Same person, similar appearance, far position → tentative (not auto-merge)
+    enriched = mgr.update([track(17, 18, 260, 240, [0.98, 0.02])], frame_idx=18, timestamp=18 / 30.0)
 
     assert enriched[0]["entity_id"] == "Person-2"
     assert mgr.get_profile("Person-2").tentative_merge_candidates == ["Person-1"]
@@ -116,7 +119,7 @@ def test_tracking_quality_uses_allowed_enum_for_tentative_and_merged_profiles():
     allowed = {"stable", "occluded", "fragmented", "tentative"}
     tentative_mgr = EntityProfileManager(auto_merge_threshold=0.8, tentative_threshold=0.35)
     tentative_mgr.update([track(3, 10, 100, 100, [1.0, 0.0])], frame_idx=10, timestamp=10 / 30.0)
-    tentative = tentative_mgr.update([track(17, 18, 260, 240, [0.2, 0.98])], frame_idx=18, timestamp=18 / 30.0)
+    tentative = tentative_mgr.update([track(17, 18, 260, 240, [0.98, 0.02])], frame_idx=18, timestamp=18 / 30.0)
 
     assert tentative[0]["tracking_quality"] == "tentative"
     assert tentative_mgr.get_profile("Person-2").tracking_quality == "tentative"

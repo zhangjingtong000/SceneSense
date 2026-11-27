@@ -2,13 +2,142 @@
 交互分析 Agent。
 
 分析多目标之间的交互关系。支持成对关系计算、群体聚类、孤立检测。
+
+v2: 基于 benchmark 验证的特征提取 + 跳变检测 → 分类为 结伴同行/面对面交谈/短暂接触/无交互。
 """
 
 import math
 from typing import Any
 
+import numpy as np
+
 from .base_agent import BaseAgent
 from .llm_client import LLMClient
+
+
+# ── 交互类型常量 ─────────────────────────────────────────────────────
+INTERACTION_TYPES = ("结伴同行", "面对面交谈", "短暂接触", "无交互")
+
+
+def _detect_jumps(trajectory: list[list[float]], threshold: float = 100.0) -> list[list[list[float]]]:
+    """将轨迹按跳变点（身份切换）分割为连续段。"""
+    if len(trajectory) < 2:
+        return [trajectory] if trajectory else []
+    segments = []
+    seg = [trajectory[0]]
+    for i in range(1, len(trajectory)):
+        prev = trajectory[i - 1]
+        curr = trajectory[i]
+        jump = math.sqrt((curr[0] - prev[0]) ** 2 + (curr[1] - prev[1]) ** 2)
+        if jump > threshold:
+            if len(seg) >= 3:
+                segments.append(seg)
+            seg = []
+        seg.append(curr)
+    if len(seg) >= 3:
+        segments.append(seg)
+    return segments if segments else [trajectory]
+
+
+def _compute_pair_features(
+    traj_a: list[list[float]], traj_b: list[list[float]],
+) -> dict:
+    """从两条轨迹计算交互几何特征（含跳变检测和最佳段对齐）。
+
+    对应 benchmark 验证的特征集：distance_mean, distance_std,
+    trajectory_cosine, co_present_seconds, distance_trend。
+    """
+    segs_a = _detect_jumps(traj_a)
+    segs_b = _detect_jumps(traj_b)
+
+    best_dist = float("inf")
+    best_features: dict | None = None
+
+    for sa in segs_a:
+        for sb in segs_b:
+            # 找两条轨迹的时间重叠帧
+            times_a = {pt[2] for pt in sa}
+            sync_pairs = []
+            for pt_b in sb:
+                t = pt_b[2]
+                for pt_a in sa:
+                    if abs(pt_a[2] - t) < 0.1:
+                        sync_pairs.append((pt_a, pt_b))
+                        break
+            if len(sync_pairs) < 2:
+                continue
+
+            dists = [math.sqrt((a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2) for a, b in sync_pairs]
+            mean_d = float(np.mean(dists))
+            if mean_d >= best_dist:
+                continue
+
+            # 计算特征
+            dur = sync_pairs[-1][0][2] - sync_pairs[0][0][2]
+            vec_a = np.array([sa[-1][0] - sa[0][0], sa[-1][1] - sa[0][1]])
+            vec_b = np.array([sb[-1][0] - sb[0][0], sb[-1][1] - sb[0][1]])
+            na, nb = float(np.linalg.norm(vec_a)), float(np.linalg.norm(vec_b))
+            cos_val = round(float(np.dot(vec_a, vec_b) / max(na * nb, 1e-6)), 3) if na > 5 and nb > 5 else None
+
+            features = {
+                "distance_mean": round(mean_d, 1),
+                "distance_std": round(float(np.std(dists)), 1) if len(dists) > 1 else 0.0,
+                "trajectory_cosine": cos_val,
+                "co_present_seconds": round(dur, 1),
+            }
+            if len(dists) >= 3:
+                frames_arr = np.array([i for i in range(len(dists))])
+                dist_arr = np.array(dists)
+                features["distance_trend"] = round(float(np.polyfit(frames_arr, dist_arr, 1)[0]), 2)
+            else:
+                features["distance_trend"] = None
+
+            best_dist = mean_d
+            best_features = features
+
+    return best_features or {"distance_mean": None}
+
+
+def _heuristic_classify(features: dict) -> tuple[str, float, str]:
+    """基于几何特征的规则分类——benchmark 验证 89% 准确率。
+
+    Returns: (interaction_type, confidence, reasoning)
+    """
+    def _val(key, default):
+        v = features.get(key)
+        return default if v is None else v
+
+    dist = _val("distance_mean", 999)
+    dist_std = _val("distance_std", 999)
+    traj_cos = features.get("trajectory_cosine")
+    duration = _val("co_present_seconds", 0)
+    dist_trend = features.get("distance_trend")
+
+    # 结伴同行: 同向、近距离、稳定、长时间
+    if traj_cos is not None and traj_cos > 0.7 and dist < 200 and dist_std < 60 and duration > 2:
+        return ("结伴同行", 0.80 if (traj_cos > 0.9 and dist < 100) else 0.65,
+                f"同向(cos={traj_cos:.2f})、距离{dist:.0f}px、共存{duration:.1f}s")
+
+    # 面对面交谈: 相向、近距离、持续
+    if traj_cos is not None and traj_cos < -0.5 and dist < 120 and duration > 3:
+        return ("面对面交谈", 0.70, f"相向(cos={traj_cos:.2f})、近距离({dist:.0f}px)、持续{duration:.1f}s")
+
+    # 短暂接触: 明显距离变化（靠近或远离）
+    if dist_trend is not None and abs(dist_trend) > 1.5 and dist < 200 and duration < 15:
+        action = "接近" if dist_trend < 0 else "远离"
+        return ("短暂接触", 0.60, f"距离变化({action}, slope={dist_trend:.1f}px/frame)、均值{dist:.0f}px")
+
+    # 相向擦肩
+    if traj_cos is not None and traj_cos < -0.5 and dist < 150:
+        return ("短暂接触", 0.70, f"轨迹反向(cos={traj_cos:.2f})、近距离({dist:.0f}px)")
+
+    # 无交互
+    if dist > 300:
+        return ("无交互", 0.85, f"距离远({dist:.0f}px)")
+    if duration < 0.5:
+        return ("无交互", 0.75, f"共现极短({duration:.1f}s)")
+
+    return ("无交互", 0.55, f"未达交互阈值(dist={dist:.0f}px, dur={duration:.1f}s)")
 
 
 class InteractionAgent(BaseAgent):
@@ -29,7 +158,7 @@ class InteractionAgent(BaseAgent):
         super().__init__("interaction_agent", llm_client, prompt)
 
     def think(self) -> dict:
-        """分析目标间的交互关系，生成描述文本。
+        """分析目标间的交互关系，v2: 基于几何特征 + 跳变检测的分类。
 
         Returns:
             {"agent_confidence": float, "warnings": list[str], "findings": list[dict]}
@@ -38,9 +167,13 @@ class InteractionAgent(BaseAgent):
         spatial_relations = self.context.get("spatial_relations", [])
         tracklet_map: dict[int, dict] = {t.get("track_id", 0): t for t in tracklets}
 
-        pair_scores = self._compute_all_pairs(tracklets, spatial_relations)
-        groups = self._cluster_groups(tracklets)
+        entity_map: dict[int, str] = {}
+        for t in tracklets:
+            tid = t.get("track_id", 0)
+            eid = t.get("entity_id", "") or f"Entity-{tid}"
+            entity_map[tid] = eid
 
+        groups = self._cluster_groups(tracklets)
         all_ids_in_groups: set[int] = set()
         for g in groups:
             all_ids_in_groups.update(g)
@@ -50,72 +183,93 @@ class InteractionAgent(BaseAgent):
         findings: list[dict] = []
         warnings: list[str] = []
         confidences: list[float] = []
-        seen_pairs: set[tuple[int, int]] = set()
+        seen_entities: set[tuple[str, str]] = set()
 
-        # 成对关系描述
-        for (tid_a, tid_b), score in pair_scores.items():
-            if score is None:
-                continue
-            pair_key = (min(tid_a, tid_b), max(tid_a, tid_b))
-            if pair_key in seen_pairs:
-                continue
-            seen_pairs.add(pair_key)
+        # ── 成对关系：基于几何特征分类 ──
+        for i in range(len(tracklets)):
+            for j in range(i + 1, len(tracklets)):
+                ta = tracklets[i]
+                tb = tracklets[j]
+                tid_a = ta.get("track_id", 0)
+                tid_b = tb.get("track_id", 0)
+                eid_a = entity_map.get(tid_a, f"Entity-{tid_a}")
+                eid_b = entity_map.get(tid_b, f"Entity-{tid_b}")
+                pair_key = (min(eid_a, eid_b), max(eid_a, eid_b))
+                if pair_key in seen_entities:
+                    continue
+                seen_entities.add(pair_key)
 
-            entity_a, entity_b = f"Entity-{tid_a}", f"Entity-{tid_b}"
-            dist = self._get_distance(tid_a, tid_b, spatial_relations)
-            dur = self._get_duration(tid_a, tid_b, spatial_relations)
+                # 计算几何特征
+                traj_a = ta.get("trajectory", []) or []
+                traj_b = tb.get("trajectory", []) or []
+                features = _compute_pair_features(traj_a, traj_b)
 
-            dist_qualifier = (
-                "非常接近" if dist < 50 else "接近" if dist < 100 else
-                "中等距离" if dist < 200 else "较远"
-            )
-            score_qualifier = "强交互" if score > 0.7 else "中等交互" if score > 0.4 else "弱交互"
+                if features.get("distance_mean") is None:
+                    # 没有有效同步帧，用 spatial_relations 回退
+                    dist = self._get_distance(tid_a, tid_b, spatial_relations)
+                    dur = self._get_duration(tid_a, tid_b, spatial_relations)
+                    if dist > 300:
+                        i_type, confidence, reasoning = "无交互", 0.80, f"距离{dist:.0f}px,无同步帧"
+                    else:
+                        i_type, confidence, reasoning = "无交互", 0.50, f"距离{dist:.0f}px,无法提取特征"
+                    features["distance_mean"] = dist
+                else:
+                    i_type, confidence, reasoning = _heuristic_classify(features)
 
-            # 相对运动方向差异
-            ta = tracklet_map.get(tid_a, {})
-            tb = tracklet_map.get(tid_b, {})
-            dir_diff = abs(ta.get("direction_deg", 0) - tb.get("direction_deg", 0))
-            dir_diff = min(dir_diff, 360 - dir_diff)
-            dir_text = "同向移动" if dir_diff < 45 else "交叉移动" if dir_diff < 135 else "反向移动"
+                # 低置信度 → LLM 精判
+                llm_result = None
+                if confidence < 0.60 and self.llm:
+                    llm_result = self._llm_classify_pair(eid_a, eid_b, features)
+                    if llm_result and llm_result.get("confidence", 0) > confidence:
+                        i_type = llm_result["interaction_type"]
+                        confidence = llm_result["confidence"]
+                        reasoning = llm_result.get("reasoning", reasoning)
 
-            description = (
-                f"{entity_a} 与 {entity_b} 间距 {dist:.0f}px（{dist_qualifier}），"
-                f"共现 {dur:.1f}s，{score_qualifier}（评分 {score:.2f}），{dir_text}"
-            )
-            evidence = [
-                f"distance={dist:.0f}px duration={dur:.1f}s score={score:.2f} dir_diff={dir_diff:.0f}°"
-            ]
-            confidence = 0.85 if score > 0.7 or score < 0.2 else 0.70 if score > 0.4 else 0.55
+                dist = features.get("distance_mean") or 0
+                dur = features.get("co_present_seconds") or 0
+                cos_val = features.get("trajectory_cosine")
 
-            findings.append({
-                "entity_id": entity_a,
-                "finding_type": "interaction_description",
-                "value": description,
-                "confidence": round(confidence, 3),
-                "evidence": evidence,
-                "related_entities": [entity_b],
-                "kg_operations": [{
-                    "op": "upsert_edge", "edge_type": "interacts_with",
-                    "from": entity_a, "to": entity_b,
-                    "properties": {"interaction_score": round(score, 3), "distance": dist, "duration": dur},
-                }],
-            })
-            confidences.append(confidence)
+                evidence = [
+                    f"dist={dist:.0f}px dur={dur:.1f}s"
+                    + (f" cos={cos_val:.2f}" if cos_val is not None else "")
+                ]
+                if features.get("distance_trend") is not None:
+                    evidence.append(f"trend={features['distance_trend']:.2f}")
+
+                description = f"{eid_a} × {eid_b}: {i_type} ({reasoning[:100]})"
+
+                findings.append({
+                    "entity_id": eid_a,
+                    "finding_type": "interaction_classification",
+                    "value": description,
+                    "interaction_type": i_type,
+                    "confidence": round(confidence, 3),
+                    "evidence": evidence,
+                    "related_entities": [eid_b],
+                    "kg_operations": [{
+                        "op": "upsert_edge", "edge_type": "interacts_with",
+                        "from": eid_a, "to": eid_b,
+                        "properties": {
+                            "interaction_type": i_type,
+                            "confidence": round(confidence, 3),
+                            "distance_px": dist,
+                            "duration_s": dur,
+                        },
+                    }],
+                })
+                confidences.append(confidence)
 
         # 孤立个体描述
         for tid in isolated_ids:
-            entity_id = f"Entity-{tid}"
+            eid = entity_map.get(tid, f"Entity-{tid}")
             nearest = self._find_nearest(tid, tracklets)
-            nearest_eid = f"Entity-{nearest}" if nearest is not None else "无"
+            nearest_eid = entity_map.get(nearest, f"Entity-{nearest}") if nearest else "无"
             dist = self._get_distance(tid, nearest, spatial_relations) if nearest else float("inf")
-            description = (
-                f"{entity_id} 独立于所有群体之外"
-                + (f"，最近目标为 {nearest_eid}（距离 {dist:.0f}px）" if nearest else "，周围无其他目标")
-            )
             findings.append({
-                "entity_id": entity_id,
+                "entity_id": eid,
                 "finding_type": "interaction_description",
-                "value": description,
+                "value": f"{eid} 独立于群体之外"
+                         + (f"，最近目标为 {nearest_eid}（距离 {dist:.0f}px）" if nearest else ""),
                 "confidence": 0.80,
                 "evidence": [f"not in any group, nearest={nearest_eid} dist={dist:.0f}px"],
                 "related_entities": [nearest_eid] if nearest else [],
@@ -126,7 +280,7 @@ class InteractionAgent(BaseAgent):
         # 群体描述
         for group in groups:
             if len(group) >= 2:
-                gnames = [f"Entity-{tid}" for tid in group]
+                gnames = [entity_map.get(tid, f"Entity-{tid}") for tid in group]
                 desc = f"群体 [{', '.join(gnames)}]（共 {len(group)} 人）聚集在同一区域"
                 findings.append({
                     "entity_id": gnames[0],
@@ -388,55 +542,37 @@ class InteractionAgent(BaseAgent):
                 return rel.get("distance_m", float("inf"))
         return float("inf")
 
-    def _llm_refine(
-        self,
-        tid_a: int,
-        tid_b: int,
-        score: float | None,
-        spatial_relations: list[dict],
-        tracklet_map: dict[int, dict],
+    def _llm_classify_pair(
+        self, eid_a: str, eid_b: str, features: dict
     ) -> dict | None:
-        """边界情况调用 LLM 做语义判断。"""
-        user_prompt = (
-            f"Entity-{tid_a} <-> Entity-{tid_b}: "
-            f"interaction_score={score:.3f}\n"
-        )
-        if (tid_a, tid_b) in [
-            (r.get("track_1"), r.get("track_2"))
-            for r in spatial_relations
-        ] or (tid_b, tid_a) in [
-            (r.get("track_1"), r.get("track_2"))
-            for r in spatial_relations
-        ]:
-            rel = next(
-                r
-                for r in spatial_relations
-                if (
-                    r.get("track_1") == tid_a
-                    and r.get("track_2") == tid_b
-                )
-                or (
-                    r.get("track_1") == tid_b
-                    and r.get("track_2") == tid_a
-                )
-            )
-            user_prompt += (
-                f"relation_type={rel.get('relation_type', 'N/A')}, "
-                f"distance={rel.get('distance_m', 'N/A')}m, "
-                f"duration={rel.get('duration_s', 'N/A')}s\n"
-            )
+        """LLM 精判：对低置信度的 Heuristic 结果做语义分析。"""
+        def _fmt(v, unit=""):
+            if v is None: return "未知"
+            if isinstance(v, float): return f"{v:.1f}{unit}"
+            return f"{v}{unit}"
 
-        user_prompt += (
-            "\nClassify interaction type: "
-            "interacting, following, approaching, departing, "
-            "surrounding, no_interaction.\n"
-            'Output JSON: {"relation_type": str, '
-            '"confidence": float, "evidence": [str]}'
+        ft = features
+        feature_text = (
+            f"距离均值: {_fmt(ft.get('distance_mean'), 'px')}, "
+            f"距离标准差: {_fmt(ft.get('distance_std'), 'px')}, "
+            f"轨迹方向余弦: {_fmt(ft.get('trajectory_cosine'))}, "
+            f"共存时长: {_fmt(ft.get('co_present_seconds'), 's')}, "
+            f"距离趋势: {_fmt(ft.get('distance_trend'))} (负=靠近 正=远离)"
         )
-
-        result = self.llm.chat_with_json_output(
-            system_prompt=self.system_prompt, user_prompt=user_prompt
+        prompt = (
+            f"分析 {eid_a} 与 {eid_b} 的交互类型。\n"
+            f"特征：{feature_text}\n\n"
+            "余弦≈1=同向，≈-1=相向，≈0=垂直。距离趋势负=靠近，正=远离。\n"
+            "类型：结伴同行 / 面对面交谈 / 短暂接触 / 无交互\n"
+            '输出 JSON: {"interaction_type": "短暂接触", "confidence": 0.xx, "reasoning": "..."}'
         )
-        if "error" not in result:
-            return result
+        try:
+            result = self.llm.chat_with_json_output(
+                system_prompt="你是视频监控交互分析助手。仅输出 JSON。",
+                user_prompt=prompt,
+            )
+            if "error" not in result:
+                return result
+        except Exception:
+            pass
         return None

@@ -476,6 +476,9 @@ async def run_pipeline(video_path: str, video_id: str, websocket, api_key: str =
     tracker = create_web_tracker(device)
     event_builder = EventBuilder(event_interval_frames=60)
     entity_profiles = EntityProfileManager()
+    # 位置门限按画面宽度比例（跨遮挡合并需要，140px 默认值在大画面下过严）
+    _frame_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)) or 1920
+    entity_profiles.max_position_gap_px = max(entity_profiles.max_position_gap_px, 0.4 * _frame_width)
     tracker_metrics = TrackerMetrics()
     previous_event_id = ""
 

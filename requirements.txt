@@ -1,0 +1,29 @@
+# SceneSense 依赖清单（从源码实际 import 反推）
+# Python >= 3.10（代码使用 PEP 604 联合类型与内置泛型）
+
+# ---- 核心：pipeline.py / perception/ / agents/ / kg/ ----
+opencv-python>=4.8        # cv2：读写视频、光流、绘制
+numpy>=1.24               # 距离矩阵、卡尔曼状态
+torch>=2.0                # 跟踪器与 ReID 推理
+torchvision>=0.15         # ResNet18 回退特征提取
+ultralytics>=8.0          # YOLOv8 检测 / 姿态
+filterpy>=1.4.5           # 卡尔曼滤波
+scipy>=1.10               # linear_sum_assignment 匈牙利匹配
+networkx>=3.0             # 场景知识图谱
+openai>=1.0               # DeepSeek（OpenAI 兼容接口）
+
+# ---- 可选：更强的 ReID 后端（二选一；都缺失时回退 ImageNet ResNet18）----
+# boxmot>=10.0            # 默认 OSNet 后端，权重自动管理
+# torchreid>=0.2.5        # 自实现 OSNet 链路，需 models/osnet_x0_25_msmt17.pt
+
+# ---- 可选：Web 演示（web/backend/）----
+# fastapi>=0.110
+# uvicorn[standard]>=0.27
+# python-multipart>=0.0.9
+
+# ---- 可选：VLM 客户端（agents/vlm_client.py、agents/doubao_vlm_client.py）----
+# Pillow>=10.0
+# requests>=2.31
+
+# ---- 开发 / 测试 ----
+pytest>=7.4

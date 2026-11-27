@@ -76,7 +76,7 @@ def test_reid_extractor_uses_half_precision_on_cuda(monkeypatch):
         lambda backbone, return_nodes: fake_feature_extractor,
     )
 
-    extractor = tracker_module.ReIDExtractor(device="cuda")
+    extractor = tracker_module.ReIDExtractor(device="cuda", backbone="resnet18")
 
     assert extractor.use_half is True
     assert extractor.model.half_called is True

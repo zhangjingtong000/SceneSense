@@ -1,37 +1,77 @@
+# ---- Python ----
 __pycache__/
 *.py[cod]
-.pytest_cache/
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+.eggs/
 
-.env
+# ---- 虚拟环境 ----
 .venv/
 venv/
+env/
 
-.superpowers/
-.claude/
-.codex/
-.playwright-mcp/
-.mcp.json
+# ---- 测试 / 缓存 ----
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
 
-# Local media, model weights, generated artifacts
+# ---- 密钥 / 本地配置 ----
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+
+# ---- 模型权重 ----
+*.pt
+*.pth
+*.onnx
+*.engine
+*.tflite
+*.openvino
+models/*.pt
+!models/.gitkeep
+
+# ---- 生成产物 ----
+data/
+outputs/
+outputs*/
+uploads/
+kg_outputs/
+*.graphml
+results*.json
+annotated*.mp4
+
+# ---- 数据集 / 本地素材 ----
+MOT17/
+Avenue Dataset/
+UCSD_P2_224_8*/
+references/
+test_data/
+ground_truth_demo/
+samples/*.mp4
 *.mp4
 *.avi
 *.mkv
 *.mov
-*.pt
-*.graphml
-*.jpg
-*.jpeg
-*.png
 
-outputs/
-uploads/
-kg_outputs/
-MOT17/
-UCSD_P2_224_8*/
-test_data/
-references/
+# ---- 内部工具链与 AI 协作痕迹 ----
+.claude/
+.codex/
+.codegraph/
+.planning/
+.superpowers/
+.playwright-mcp/
+.mcp.json
+docs/superpowers/
 
-# Local experiment dumps
-results*.json
-mot17*.json
-ucsd*.json
+# ---- 系统 ----
+.DS_Store
+Thumbs.db
+desktop.ini

@@ -5,6 +5,8 @@ import math
 from dataclasses import dataclass, field
 from typing import Any
 
+import numpy as np
+
 
 def _cosine_similarity(a: list[float], b: list[float]) -> float:
     if not a or not b:
@@ -96,8 +98,9 @@ class EntityProfileManager:
         self,
         auto_merge_threshold: float = 0.72,
         tentative_threshold: float = 0.30,
-        max_merge_gap_frames: int = 150,
+        max_merge_gap_frames: int = 300,
         max_position_gap_px: float = 140.0,
+        min_merge_gap_frames: int = 10,
         promotion_min_observations: int = 5,
         promotion_min_score: float = 0.55,
         promotion_min_position_score: float = 0.25,
@@ -110,11 +113,15 @@ class EntityProfileManager:
         self.tentative_threshold = tentative_threshold
         self.max_merge_gap_frames = max_merge_gap_frames
         self.max_position_gap_px = max_position_gap_px
+        self.min_merge_gap_frames = min_merge_gap_frames
         self.promotion_min_observations = promotion_min_observations
         self.promotion_min_score = promotion_min_score
         self.promotion_min_position_score = promotion_min_position_score
         self.promotion_min_direction_score = promotion_min_direction_score
         self.promotion_min_appearance_score = promotion_min_appearance_score
+        # 实验项：候选分数 z-norm 相对排序（替代绝对阈值，缓解跨场景阈值失效）
+        self.use_score_norm = False
+        self.auto_merge_z = 0.8
         self.enable_debug = enable_debug
         self.max_debug_records = max_debug_records
         self.debug_records: list[dict[str, Any]] = []
@@ -128,15 +135,33 @@ class EntityProfileManager:
         self._profiles: dict[str, EntityProfile] = {}
         self._track_to_entity: dict[int, str] = {}
         self._next_entity_index = 1
+        # Tracks which entities are already claimed by an active track this frame
+        self._claimed_entities: set[str] = set()
+        # 记录每个实体在本帧被哪个 track 占用，用于检测多 track 抢同一实体
+        self._claimed_owner: dict[str, int] = {}
 
     def update(self, tracked: list[dict[str, Any]], frame_idx: int, timestamp: float) -> list[dict[str, Any]]:
         enriched = []
         candidate_entity_ids = set(self._profiles)
+        self._claimed_entities.clear()
+        self._claimed_owner.clear()
+        # Sort: already-known tracks first → they claim their entity before new tracks can steal it
+        tracked = sorted(tracked, key=lambda o: 0 if o.get("track_id", 0) in self._track_to_entity else 1)
         for obj in tracked:
             entity_id, merge_evidence = self._resolve_entity(obj, frame_idx, candidate_entity_ids)
+            # 防御：_resolve_entity 可能返回一个尚未建档的 entity（极端合并场景），
+            # 缺档会导致 KeyError 并中断整段视频的处理。
+            if entity_id not in self._profiles:
+                self._profiles[entity_id] = EntityProfile(
+                    entity_id=entity_id, first_seen_frame=frame_idx
+                )
             profile = self._profiles[entity_id]
             self._apply_observation(profile, obj, frame_idx, timestamp, merge_evidence)
             entity_id = self._maybe_promote_tentative(profile, obj, frame_idx) or entity_id
+            if entity_id not in self._profiles:
+                self._profiles[entity_id] = EntityProfile(
+                    entity_id=entity_id, first_seen_frame=frame_idx
+                )
             profile = self._profiles[entity_id]
 
             out = dict(obj)
@@ -174,14 +199,27 @@ class EntityProfileManager:
     ) -> tuple[str, dict[str, Any] | None]:
         track_id = int(obj["track_id"])
         if track_id in self._track_to_entity:
-            return self._track_to_entity[track_id], None
+            eid = self._track_to_entity[track_id]
+            owner = self._claimed_owner.get(eid)
+            if owner is not None and owner != track_id:
+                # 同一帧里该实体已被另一个 track 占用：说明历史映射发生了冲突，
+                # 必须丢弃本 track 的旧映射并重新分配，否则两个真人会被算成一个人。
+                self._track_to_entity.pop(track_id, None)
+            else:
+                self._claimed_entities.add(eid)
+                self._claimed_owner[eid] = track_id
+                return eid, None
 
         best_entity_id = ""
         best_score = 0.0
         best_factors: dict[str, Any] = {}
         scored_candidates: list[dict[str, Any]] = []
         for entity_id in candidate_entity_ids:
-            profile = self._profiles[entity_id]
+            # 候选集合是本次 update 开始时的快照；循环中可能发生合并/删除，
+            # 这里必须跳过已不存在的 profile，否则会抛 KeyError 中断整段视频。
+            profile = self._profiles.get(entity_id)
+            if profile is None:
+                continue
             score, factors = self._score_candidate(profile, obj, frame_idx)
             scored_candidates.append({
                 "entity_id": entity_id,
@@ -194,12 +232,41 @@ class EntityProfileManager:
                 best_score = score
                 best_factors = factors
 
+        # Prevent track stealing: if the best entity was recently active,
+        # require strong appearance match for auto-merge
+        can_auto_merge = True
+        if best_entity_id and best_entity_id in self._profiles:
+            profile = self._profiles[best_entity_id]
+            frame_gap = frame_idx - profile.last_seen_frame
+            if 0 < frame_gap < self.min_merge_gap_frames:
+                obj_feat = list(obj.get("appearance_feature", []))
+                if not profile.last_feature or not obj_feat:
+                    can_auto_merge = False
+                elif _cosine_similarity(profile.last_feature, obj_feat) < 0.85:
+                    can_auto_merge = False
+
+        # 分数归一化：把“跨场景固定的绝对阈值”换成“本帧候选内的相对优势”。
+        # 当候选分数分布平稳（场景宽松）时门槛自然抬高，噪声大时自动放宽，
+        # 从而避免阈值只在某一个场景成立。
+        relative_ok = True
+        if self.use_score_norm and len(scored_candidates) > 1:
+            values = np.array([c["score"] for c in scored_candidates], dtype=np.float64)
+            mu = float(values.mean())
+            sigma = float(values.std()) + 1e-6
+            best_z = (best_score - mu) / sigma
+            relative_ok = best_z >= self.auto_merge_z
+
         if (
             best_entity_id
+            and relative_ok
             and best_score >= self.auto_merge_threshold
             and best_factors.get("spatially_plausible", False)
+            and can_auto_merge
+            and best_entity_id not in self._claimed_entities  # already owned by another active track
         ):
             self._track_to_entity[track_id] = best_entity_id
+            self._claimed_entities.add(best_entity_id)
+            self._claimed_owner[best_entity_id] = track_id
             profile = self._profiles[best_entity_id]
             self._record_debug_decision(
                 obj,
@@ -221,8 +288,20 @@ class EntityProfileManager:
         self._track_to_entity[track_id] = entity_id
         self._profiles[entity_id] = EntityProfile(entity_id=entity_id, first_seen_frame=frame_idx)
         if best_entity_id and best_score >= self.tentative_threshold:
-            self._profiles[entity_id].tentative_merge_candidates.append(best_entity_id)
-            self._profiles[entity_id].tracking_quality = "tentative"
+            # Check appearance before establishing tentative link
+            obj_feat = list(obj.get("appearance_feature", []))
+            best_profile = self._profiles.get(best_entity_id)
+            if obj_feat and best_profile and best_profile.last_feature:
+                if _cosine_similarity(best_profile.last_feature, obj_feat) < 0.70:
+                    # Appearance mismatch — don't tentatively link
+                    pass
+                else:
+                    self._profiles[entity_id].tentative_merge_candidates.append(best_entity_id)
+                    self._profiles[entity_id].tracking_quality = "tentative"
+            else:
+                # No appearance data — still create tentative (conservative for occlusion)
+                self._profiles[entity_id].tentative_merge_candidates.append(best_entity_id)
+                self._profiles[entity_id].tracking_quality = "tentative"
             self._record_debug_decision(
                 obj,
                 frame_idx,
@@ -254,8 +333,18 @@ class EntityProfileManager:
     ) -> tuple[float, dict[str, Any]]:
         frame_gap = frame_idx - profile.last_seen_frame
         if frame_gap <= 0:
+            # Entity was already updated this frame by another track → different person
+            if frame_gap == 0:
+                return 0.0, {"frame_gap": frame_gap, "reason": "entity_already_active_this_frame"}
             return 0.0, {"frame_gap": frame_gap, "reason": "non_forward_frame_gap"}
-        if frame_gap > self.max_merge_gap_frames:
+        # Appearance override: strong feature match allows longer gaps (pole occlusion)
+        appearance_feature = list(obj.get("appearance_feature", []))
+        has_strong_appearance = False
+        if profile.last_feature and appearance_feature:
+            quick_app = _cosine_similarity(profile.last_feature, appearance_feature)
+            has_strong_appearance = quick_app > 0.90
+
+        if frame_gap > self.max_merge_gap_frames and not has_strong_appearance:
             return 0.0, {"frame_gap": frame_gap, "reason": "gap_exceeds_limit"}
 
         centroid = list(obj.get("centroid", [0.0, 0.0]))
@@ -466,7 +555,11 @@ class EntityProfileManager:
             for item in recent
             if item.get("factors", {}).get("appearance_score") is not None
         ]
-        if appearance_scores and min(appearance_scores) < self.promotion_min_appearance_score:
+        # Require at least 2 appearance observations for promotion —
+        # prevents bypass when reid_interval skips frames
+        if len(appearance_scores) < 2:
+            return False
+        if min(appearance_scores) < self.promotion_min_appearance_score:
             return False
         return True
 

@@ -170,6 +170,9 @@ class Pipeline:
             track_activation_threshold=0.18,
             lost_track_buffer=120,
             minimum_matching_threshold=0.65,
+            # ReID 跟随检测设备：默认 cpu 时每帧 CPU ResNet18 会让管线慢 11 倍
+            reid_device=device if str(device).startswith("cuda") else "cpu",
+            reid_interval=1,
         )
         # spatial_neighbor_threshold 用像素值（无相机标定时 approximate 100px≈2-3m）
         self.event_builder = EventBuilder(
@@ -240,6 +243,15 @@ class Pipeline:
 
         print(f"Pipeline started. Source={self.source}, FPS={fps:.1f}, "
               f"EventInterval={self.event_interval_frames}frames, TTL={self.ttl_seconds}s")
+
+        # 实体合并的位置门限按画面宽度比例设置（默认 140px 只适合小画面，
+        # 跨几秒遮挡时人物在 1920 画面里可能位移上千像素，会被误判为新实体）
+        frame_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)) or 1920
+        self.entity_profiles.max_position_gap_px = max(
+            self.entity_profiles.max_position_gap_px, 0.4 * frame_width
+        )
+        print(f"实体位置门限: {self.entity_profiles.max_position_gap_px:.0f}px "
+              f"(画面宽 {frame_width}px)")
         print("-" * 60)
 
         tracker_results: list[dict] = []

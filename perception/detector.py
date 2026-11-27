@@ -14,7 +14,9 @@ class YOLODetector:
         imgsz: int = 960,
     ):
         self.model = YOLO(model_path)
-        self.model.to(device)
+        # 导出格式（TensorRT / ONNX 等）不支持 .to()，设备在推理时传入
+        if not str(model_path).lower().endswith((".engine", ".onnx", ".openvino", ".tflite")):
+            self.model.to(device)
         self.device = device
         self.use_half = str(device).startswith("cuda")
         self.conf_threshold = conf_threshold
@@ -42,6 +44,33 @@ class YOLODetector:
             })
 
         return detections
+
+    def detect_batch(self, frames: list[np.ndarray]) -> list[list[dict]]:
+        """批量检测：一次前向处理多帧，显著提升 GPU 利用率。
+
+        返回与输入一一对应的检测列表。
+        """
+        if not frames:
+            return []
+        results = self.model(
+            frames, conf=self.conf_threshold, classes=self.classes,
+            imgsz=self.imgsz, verbose=False, device=self.device,
+            half=self.use_half,
+        )
+        batch: list[list[dict]] = []
+        for item in results:
+            detections: list[dict] = []
+            if item.boxes is not None:
+                for box in item.boxes:
+                    x1, y1, x2, y2 = box.xyxy[0].tolist()
+                    detections.append({
+                        "bbox": [x1, y1, x2, y2],
+                        "class": item.names[int(box.cls[0])],
+                        "class_id": int(box.cls[0]),
+                        "confidence": float(box.conf[0]),
+                    })
+            batch.append(detections)
+        return batch
 
 
 class PoseEstimator:

@@ -1,4 +1,4 @@
-"""
+﻿"""
 Hybrid tracker: BoT-SORT architecture with GMC + ReID + Kalman Filter.
 
 Replaces supervision ByteTrack. Same update() interface for drop-in compatibility.
@@ -8,6 +8,7 @@ and sparse optical flow for camera motion compensation.
 
 import math
 from collections import deque
+from pathlib import Path
 
 import cv2
 import numpy as np
@@ -122,34 +123,136 @@ class GMC:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 class ReIDExtractor:
-    """Extracts appearance embeddings from person crops using ResNet18.
+    """Extracts appearance embeddings from person crops.
 
-    Returns 512-dim L2-normalized features."""
+    优先使用 torchreid 的 OSNet（MSMT17 预训练）+ 自实现的 cv2 批量预处理，
+    比 BoxMOT 的 encode 链路快约 1.3x；torchreid 不可用时回退 BoxMOT，
+    再不可用则回退 ImageNet ResNet18。
+    所有后端都返回 512 维 L2 归一化特征。
+    """
 
-    def __init__(self, device='cpu'):
+    _OSNET_WEIGHTS = Path(__file__).resolve().parent.parent / "models" / "osnet_x0_25_msmt17.pt"
+
+    def __init__(self, device='cpu', backbone='osnet'):
         self.device = device
+        self.backbone = backbone
         self.use_half = str(device).startswith('cuda')
-        from torchvision.models import ResNet18_Weights
-        backbone = resnet18(weights=ResNet18_Weights.IMAGENET1K_V1)
-        # Use layers up to avgpool (before fc)
-        self.model = create_feature_extractor(backbone, {'avgpool': 'feat'})
-        self.model.to(device)
-        if self.use_half:
-            self.model.half()
-        self.model.eval()
-        self._transform = T.Compose([
-            T.ToPILImage(),
-            T.Resize((128, 64)),
-            T.ToTensor(),
-            T.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-        ])
-        self._dummy = torch.zeros(1, 512)  # dummy feature for detection w/o valid crop
+        self._osnet = None
+        self._osnet_model = None
+        self._dummy = torch.zeros(1, 512)
+
+        if backbone == 'osnet':
+            # 默认走 BoxMOT（端到端实测更稳）；'osnet_fast' 可选自实现链路
+            try:
+                from boxmot.reid import ReIDConfig, create_reid_encoder
+                self._osnet = create_reid_encoder(
+                    ReIDConfig(model="osnet-x0-25-msmt17", device=device)
+                )
+                self.backbone = 'osnet'
+            except Exception as exc:
+                print(f"[ReID] BoxMOT 不可用（{exc}），回退 ResNet18")
+                self.backbone = 'resnet18'
+        elif backbone == 'osnet_fast':
+            try:
+                import torchreid
+                model = torchreid.models.build_model("osnet_x0_25", num_classes=1041, pretrained=False)
+                state = torch.load(str(self._OSNET_WEIGHTS), map_location="cpu")
+                model.load_state_dict(state, strict=True)
+                model.eval().to(device)
+                if self.use_half:
+                    model.half()
+                self._osnet_model = model
+                self.backbone = 'osnet_fast'
+            except Exception as exc:
+                print(f"[ReID] 自实现 OSNet 不可用（{exc}），回退 BoxMOT")
+                from boxmot.reid import ReIDConfig, create_reid_encoder
+                self._osnet = create_reid_encoder(
+                    ReIDConfig(model="osnet-x0-25-msmt17", device=device)
+                )
+                self.backbone = 'osnet'
+
+        if self.backbone == 'resnet18':
+            from torchvision.models import ResNet18_Weights
+            backbone_model = resnet18(weights=ResNet18_Weights.IMAGENET1K_V1)
+            self.model = create_feature_extractor(backbone_model, {'avgpool': 'feat'})
+            self.model.to(device)
+            if self.use_half:
+                self.model.half()
+            self.model.eval()
+            self._transform = T.Compose([
+                T.ToPILImage(),
+                T.Resize((128, 64)),
+                T.ToTensor(),
+                T.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+            ])
 
     @torch.no_grad()
     def extract(self, frame: np.ndarray, bboxes: np.ndarray) -> np.ndarray:
         """Extract features for each bbox (xyxy format). Returns Nx512 ndarray."""
         if len(bboxes) == 0:
             return np.empty((0, 512), dtype=np.float32)
+
+        if self.backbone == 'osnet_fast' and self._osnet_model is not None:
+            h, w = frame.shape[:2]
+            size = (128, 256)  # OSNet 训练输入：宽 128、高 256
+            out = np.tile(self._dummy.numpy(), (len(bboxes), 1))
+            crops = []
+            valid_idx = []
+            for i, bbox in enumerate(bboxes):
+                x1, y1, x2, y2 = [int(round(float(v))) for v in bbox]
+                x1, y1 = max(0, x1), max(0, y1)
+                x2, y2 = min(w, x2), min(h, y2)
+                if x2 - x1 < 4 or y2 - y1 < 8:
+                    continue
+                crop = cv2.resize(frame[y1:y2, x1:x2], size, interpolation=cv2.INTER_LINEAR)
+                crops.append(crop)
+                valid_idx.append(i)
+            if not crops:
+                return out
+
+            # cv2 + numpy 批量预处理（比逐张 PIL 转换快）
+            batch = np.empty((len(crops), 3, size[1], size[0]), dtype=np.float32)
+            for j, crop in enumerate(crops):
+                batch[j] = crop[:, :, ::-1].transpose(2, 0, 1)
+            batch /= 255.0
+            mean = np.array([0.485, 0.456, 0.406], dtype=np.float32)[None, :, None, None]
+            std = np.array([0.229, 0.224, 0.225], dtype=np.float32)[None, :, None, None]
+            batch = (batch - mean) / std
+
+            tensor = torch.from_numpy(batch).to(self.device)
+            if self.use_half:
+                tensor = tensor.half()
+            feats = self._osnet_model(tensor)
+            feats = torch.nn.functional.normalize(feats.float(), p=2, dim=1).cpu().numpy()
+            for j, idx in enumerate(valid_idx):
+                out[idx] = feats[j]
+            return out
+
+        if self.backbone == 'osnet' and self._osnet is not None:
+            from boxmot.structures import Boxes, Detections, Frame
+            h, w = frame.shape[:2]
+            clipped = []
+            for bbox in bboxes:
+                x1, y1, x2, y2 = [float(v) for v in bbox]
+                clipped.append([max(0.0, x1), max(0.0, y1), min(w, x2), min(h, y2)])
+            img = torch.from_numpy(np.ascontiguousarray(frame[:, :, ::-1])) \
+                .permute(2, 0, 1).contiguous().to(torch.uint8)
+            sample_id = "frame"
+            f = Frame(image=img, sample_id=sample_id)
+            boxes = torch.tensor(clipped, dtype=torch.float32)
+            dets = Detections(
+                geometry=Boxes(boxes),
+                scores=torch.ones(len(clipped)),
+                class_ids=torch.zeros(len(clipped), dtype=torch.long),
+                sample_id=sample_id,
+            )
+            feats = self._osnet.encode([f], [dets])[0]
+            feats = torch.nn.functional.normalize(feats.float(), p=2, dim=1)
+            out = np.tile(self._dummy.numpy(), (len(bboxes), 1))
+            for i in range(min(len(feats), len(bboxes))):
+                out[i] = feats[i].cpu().numpy()
+            return out
+
         crops = []
         valid_idx = []
         h, w = frame.shape[:2]
@@ -227,6 +330,10 @@ class Track:
         self.smooth_feat = feature
         self.features = deque([feature] if feature is not None else [], maxlen=50)
         self._feature_alpha = 0.9
+        self._feat_history: deque = deque(
+            [feature] if feature is not None else [], maxlen=15
+        )
+        self._height_history: deque = deque(maxlen=15)
 
         # Trajectory
         cx, cy = (bbox_xyxy[0] + bbox_xyxy[2]) / 2, (bbox_xyxy[1] + bbox_xyxy[3]) / 2
@@ -292,6 +399,8 @@ class Track:
         self.trajectory.append([cx, cy, timestamp])
         if len(self.trajectory) > 90:
             self.trajectory = self.trajectory[-90:]
+        # 记录框高，用于判断当前检测框是否被遮挡截断（同一人的高度应当连续）
+        self._height_history.append(float(max(1.0, bbox_xyxy[3] - bbox_xyxy[1])))
 
     def update_features(self, feat):
         if feat is None:
@@ -303,6 +412,18 @@ class Track:
             self.smooth_feat = self._feature_alpha * self.smooth_feat + (1 - self._feature_alpha) * feat
         self.smooth_feat = self.smooth_feat / (np.linalg.norm(self.smooth_feat) + 1e-10)
         self.features.append(feat)
+        # 保留近期特征，供中位数聚合使用（抗遮挡帧的离群特征）
+        self._feat_history.append(feat)
+        if len(self._feat_history) > 15:
+            self._feat_history.pop(0)
+
+    def median_feature(self):
+        """近 15 帧特征的中位数（已归一化）。遮挡帧占比高时比 EMA 更稳。"""
+        if not self._feat_history:
+            return self.smooth_feat
+        stacked = np.stack(self._feat_history, axis=0)
+        med = np.median(stacked, axis=0)
+        return med / (np.linalg.norm(med) + 1e-10)
 
     def apply_gmc(self, H):
         """Apply camera motion compensation to KF state."""
@@ -384,7 +505,12 @@ class MultiObjectTracker:
         with_gmc: bool = True,
         gmc_method: str = 'sparseOptFlow',
         reid_interval: int = 1,
+        include_lost_in_low_stage: bool = False,
     ):
+        # 低分框二次匹配阶段是否纳入 lost 轨迹。
+        # True（默认）：被遮挡后重新出现的人只有低分框，纳入才能救回；
+        # False：保留旧行为（仅 confirmed 参与），用于消融对比。
+        self.include_lost_in_low_stage = include_lost_in_low_stage
         self.track_high_thresh = 0.5
         self.track_low_thresh = max(0.08, track_activation_threshold - 0.15)
         self.new_track_thresh = 0.6
@@ -392,6 +518,13 @@ class MultiObjectTracker:
         self.lost_track_buffer = lost_track_buffer
         self.proximity_thresh = 0.5
         self.appearance_thresh = 0.25
+        # 实验项：匹配区分度门限（0 表示关闭，保持原行为）
+        self.match_margin = 0.0
+        self.margin_confident = 0.5
+        # 实验项：外观相似度用近 15 帧中位数而非 EMA（抗遮挡帧离群）
+        self.use_median_feature = False
+        # 实验项：被遮挡截断的检测框用历史中位高度补全
+        self.correct_truncated_bbox = False
 
         self.tracked_tracks: list[Track] = []
         self.lost_tracks: list[Track] = []
@@ -425,6 +558,7 @@ class MultiObjectTracker:
     def update(
         self, detections: list[dict], frame_idx: int, timestamp: float,
         frame: np.ndarray | None = None,
+        features: np.ndarray | None = None,
     ) -> list[dict]:
         """Run tracking on a new frame.
 
@@ -433,6 +567,8 @@ class MultiObjectTracker:
             frame_idx: current frame index
             timestamp: current timestamp in seconds
             frame: BGR frame image (for ReID + GMC). If None, ReID/GMC are skipped.
+            features: 可选，外部预先算好的 ReID 特征（Nx512）。
+                传入时跳过内部提取，用于让 ReID 在独立线程里与检测并行。
 
         Returns:
             [{"track_id":int, "bbox":[...], "class":str, "centroid":[...],
@@ -459,7 +595,10 @@ class MultiObjectTracker:
             and self.reid is not None
             and frame_idx % self.reid_interval == 0
         )
-        if refresh_reid:
+        if features is not None:
+            # 外部已提供特征（ReID 在独立线程算好），直接使用
+            features = np.asarray(features, dtype=np.float32)
+        elif refresh_reid:
             features = self.reid.extract(frame, bboxes_xyxy)
         else:
             features = np.zeros((len(detections), 512), dtype=np.float32)
@@ -511,9 +650,12 @@ class MultiObjectTracker:
                 if track in self.lost_tracks:
                     self.lost_tracks.remove(track)
                     self.tracked_tracks.append(track)
-            # Unmatched tracks from stage1 that are confirmed → go to stage2
-            stage2_tracks = [stage1_tracks[i] for i in u_tracks
-                             if stage1_tracks[i].is_confirmed()]
+            # 未匹配的 stage1 轨迹（含 lost）都应进入低分框阶段。
+            # 被遮挡的人重新出现时往往只剩低分框，若把 lost 排除，
+            # 这些轨迹永远等不到能救回它的检测。
+            stage2_tracks = [stage1_tracks[i] for i in u_tracks]
+            if not self.include_lost_in_low_stage:
+                stage2_tracks = [t for t in stage2_tracks if t.is_confirmed()]
         else:
             stage2_tracks = confirmed
             assigned_dets = set()
@@ -524,13 +666,21 @@ class MultiObjectTracker:
             low_boxes = bboxes_xyxy[low_idx]
             low_sc = scores[low_idx]
             iou_dists = self._iou_distance(stage2_tracks, low_boxes)
+            # 经验：让外观独立救回低分框会引入错误关联（恢复率反而下降），
+            # 因此这里只用 IoU，外观在 stage1 已经参与过。
             matches, u_tracks, u_dets = self._match(iou_dists, thresh=0.5)
             for ti, di in matches:
                 det_i = low_idx[di]
-                stage2_tracks[ti].update(bboxes_xyxy[det_i], scores[det_i],
-                                         features[det_i] if refresh_reid else None,
-                                         frame_idx, timestamp)
+                track = stage2_tracks[ti]
+                track.update(bboxes_xyxy[det_i], scores[det_i],
+                             features[det_i] if refresh_reid else None,
+                             frame_idx, timestamp)
                 assigned_dets.add(det_i)
+                # 被低分框救回的 lost 轨迹要重新回到活跃集合
+                if track in self.lost_tracks:
+                    self.lost_tracks.remove(track)
+                    self.tracked_tracks.append(track)
+                    track.state = 'confirmed'
             # Unmatched → lost
             for ti in u_tracks:
                 t = stage2_tracks[ti]
@@ -609,7 +759,11 @@ class MultiObjectTracker:
     def _embedding_distance(self, tracks, det_feats):
         """Cosine distance matrix (0=identical, 1=orthogonal)."""
         track_feats = np.array([
-            t.smooth_feat if t.smooth_feat is not None else np.zeros(det_feats.shape[1], dtype=np.float32)
+            (
+                t.median_feature()
+                if (self.use_median_feature and len(t._feat_history) >= 3)
+                else (t.smooth_feat if t.smooth_feat is not None else np.zeros(det_feats.shape[1], dtype=np.float32))
+            )
             for t in tracks
         ])
         # Cosine similarity
@@ -629,13 +783,27 @@ class MultiObjectTracker:
         union = area1[:, None] + area2[None, :] - inter
         return inter / (union + 1e-10)
 
-    @staticmethod
-    def _match(dists, thresh=0.7):
-        """Hungarian matching with threshold."""
+    def _match(self, dists, thresh=0.7):
+        """Hungarian matching with threshold + optional margin check.
+
+        margin 检查：当某个匹配“最佳与次佳几乎一样近”时（区分度不足），
+        该匹配不可信，宁可先不匹配，交由后续阶段或新轨迹处理。
+        这是把“绝对阈值”换成“场景内相对区分度”的一种低成本做法。
+        """
         if dists.size == 0:
             return [], list(range(dists.shape[0])), list(range(dists.shape[1]))
         row_ind, col_ind = linear_sum_assignment(dists)
-        matches = [(r, c) for r, c in zip(row_ind, col_ind) if dists[r, c] < thresh]
+        matches = []
+        for r, c in zip(row_ind, col_ind):
+            if dists[r, c] >= thresh:
+                continue
+            if self.match_margin > 0 and dists.shape[1] > 1:
+                sorted_row = np.sort(dists[r])
+                margin = sorted_row[1] - sorted_row[0]
+                # 区分度不足时宁可不配：把“绝对距离阈值”换成“相对区分度”
+                if margin < self.match_margin:
+                    continue
+            matches.append((r, c))
         u_rows = [r for r in range(dists.shape[0]) if r not in [m[0] for m in matches]]
         u_cols = [c for c in range(dists.shape[1]) if c not in [m[1] for m in matches]]
         return matches, u_rows, u_cols
@@ -670,6 +838,15 @@ class MultiObjectTracker:
             else:
                 bbox = bbox_raw
             self._bbox_ema[tid] = bbox
+
+            # 实验项：被遮挡截断的框用历史中位高度补全（底边不动，向上扩）。
+            # 部分遮挡时检测框只覆盖可见部分，补全后更接近真实人体框，
+            # 便于与 GT 的完整框匹配。
+            if self.correct_truncated_bbox and len(t._height_history) >= 5:
+                median_h = float(np.median(t._height_history))
+                current_h = bbox[3] - bbox[1]
+                if current_h < 0.75 * median_h:
+                    bbox = [bbox[0], bbox[3] - median_h, bbox[2], bbox[3]]
 
             results.append({
                 'track_id': tid,
