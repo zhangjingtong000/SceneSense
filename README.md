@@ -57,6 +57,28 @@ tracklet 会断，Entity 不该断。按 0.35 位置 + 0.30 时间 + 0.35 外观
 - `continuity.py`：写 Event / Entity 节点和 `belongs_to`、`interacts_with`、`next` 边。同一对实体的交互边按事件聚合，保留最近 20 条证据，`confidence = min(1, 事件数 / 5)`，`duration` 由证据累加。
 - `rule_engine.py` + `kg_builder.py`：从 Behavior 节点生成规则（zone_type、速度区间、停留时长、方向变化），逐实体检查；`kg_builder` 让 LLM 产出行为模板与 Scene 节点。
 
+## 前置要求
+
+**Python 3.10+**，`pip install -r requirements.txt`。Web 演示那一段在 `requirements.txt` 里默认
+注释着，要跑 `uvicorn` 得先取消注释再装。
+
+**模型权重**：
+
+| 权重 | 放哪 / 怎么来 | 缺失的后果 |
+|---|---|---|
+| `yolov8n-pose.pt`（检测 + 姿态） | 首次运行时 Ultralytics 自动下载 | 跑不起来（必需） |
+| `osnet_x0_25_msmt17.pt`（ReID 特征，512 维） | 手动放到 `models/`，或交给 BoxMOT 管理 | 回退 ImageNet ResNet18：ID 连续性明显变差，交叉遮挡后更容易换 ID。日志会打印 `[ReID] BoxMOT 不可用（…），回退 ResNet18`，看到这行就说明正在用回退链路 |
+
+OSNet 权重不随仓库分发：它按 MSMT17 训练，而 MSMT17 的图像有使用限制，权重再分发同样受限；
+文件本身也不小。要精确的 ID 连续性就把权重放进 `models/`，只是看看效果则回退版也能跑完。
+
+**API Key**：Agent 层是在线 LLM（DeepSeek），需 `set DEEPSEEK_API_KEY=sk-...`。
+不需要它时用 `--dry-run`，只跑检测 / 跟踪 / 事件 / KG，不碰网络。
+
+**数据集**：MOT17 不随仓库分发（许可 + 体积：train 集图像以 GB 计）。要跑标准 MOT 指标得自备，
+把 `gt.txt` 和导出的预测文件喂给适配器；仓库自带的 200 帧合成序列（`evaluation/demo_data/`，219 KB）
+clone 下来即可验证指标链路。
+
 ## 快速开始
 
 ```bash
@@ -66,7 +88,8 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
-**权重**：`yolov8n-pose.pt` 首次运行时 Ultralytics 自动下载；想要更好的 OSNet 特征，把 `osnet_x0_25_msmt17.pt` 放到 `models/`（或交给 BoxMOT 管理）。缺失时回退 ImageNet ResNet18，日志里会打印 `[ReID] BoxMOT 不可用（…），回退 ResNet18`——看到这行就说明 ID 连续性会变差。
+**权重**：`yolov8n-pose.pt` 开箱自动下载；想要稳定的 OSNet 特征，把 `osnet_x0_25_msmt17.pt`
+放进 `models/`（见「前置要求」的表）。
 
 **示例视频（不需要自备素材）**：`assets/demo/sample.mp4` 是仓库自带的**合成监控素材**（1280×720 / 25fps / 8s / 1.3 MB），4 个几何绘制的行人，包含交叉遮挡、一人在画面中部低速徘徊、一人走出画面再回来。**不是真实监控画面，也不含任何人像。**
 
@@ -96,7 +119,9 @@ python pipeline.py --source your_video.mp4 --with-anomaly \
   --output outputs/results.json --kg-path outputs/scene.graphml
 ```
 
-**Web 演示**：先取消 `requirements.txt` 里 Web 段的注释并安装，然后 `python -m uvicorn web.backend.main:app --port 8000`，打开 `http://127.0.0.1:8000`。
+**Web 演示**：前端在 `web/frontend/`（原生 HTML/JS，无构建链），后端在 `web/backend/`。
+先取消 `requirements.txt` 里 Web 段的注释并安装，然后 `python -m uvicorn web.backend.main:app --port 8000`，
+打开 `http://127.0.0.1:8000`。
 
 ## 指标怎么用（MOT）
 
@@ -177,6 +202,19 @@ python -m evaluation.make_demo_sequence --report
 
 改了生成器要重跑这一步——`TestDemoSequence` 会检查 `demo_data/` 与生成器输出逐字节一致。
 
+### 自建 gate 与标准指标的分工
+
+适配器之外还有一套自建 gate 体系，判的是「这次跟踪能不能用」，不与 MOTChallenge 的成绩可比：
+帧级召回 / 精度（各 0.90 门槛）、人物发现率、最长连续漏检（10 帧）、错误合并次数、碎片数。
+`recovery_rate` 由 GT 的 `person_id` 在可见帧断口处**自动计算，无需人工标注**
+（`compute_recovery_rates`），分 0–2 秒 / 2–10 秒 / >10 秒三档，`run_evaluation` 默认就会传入
+`gt_by_frame` / `pred_by_frame`。它只在两种情形下是 `None`：直接调用 `gate2_continuity` 时没传 GT，
+或某一档没有可判定的「消失—重现」事件（分母为 0）。
+`python scripts/run_gate.py … --mot-gt <gt.txt>` 会在 gate 报告里追加 MOT 一节（不参与 gate 判定）。
+
+两个后端要单独装：`pip install motmetrics` 给 IDF1 / MOTA；`pip install --no-deps trackeval` 给 HOTA
+（它的 numpy 版本声明会拉起 2.5+，和本机 numba 的 `numpy<2.5` 打架，所以要 `--no-deps`）。
+
 ## 测试
 
 ```bash
@@ -195,13 +233,45 @@ python -m pytest -q
 | 图谱 | NetworkX DiGraph + GraphML |
 | Agent | 自实现 BaseAgent / Orchestrator + DeepSeek（OpenAI SDK 兼容） |
 | 服务 | FastAPI + WebSocket |
+| 前端 | `web/frontend/`：原生 HTML/CSS/JS，无构建链、无框架依赖 |
 
-## 已知限制
+## 脚本
 
-- **标准 MOT 指标要自备数据集**。已提供 `evaluation/mot_metrics.py`：给它一份预测文件（MOTChallenge `txt` 或 `scripts/export_predictions.py` 的 JSONL）和 MOT17 `gt.txt`，就算得出 IDF1 / MOTA / IDP / IDR / FP / FN / IDSW（py-motmetrics）与 HOTA / DetA / AssA（TrackEval；`pip install --no-deps trackeval`，它的 numpy 版本声明会拉起 2.5+，和本机 numba 的 `numpy<2.5` 打架）；`python scripts/run_gate.py … --mot-gt <gt.txt>` 会在 gate 报告里追加这一节（不参与 gate 判定）。**仓库不附带 MOT17 数据集**（许可 + 体积），需自行下载。**已在本机 MOT17 train 的 7 个序列上跑过真实评测**（逐序列单独算，IDF1 0.21–0.39、IDR 0.08–0.30，不是官方提交成绩，见「指标怎么用（MOT）」）；另有合成数据回归："完美 GT"（预测即 GT）自检得到 IDF1 = 1.0 / MOTA = 1.0 / HOTA = 1.0，加上 `evaluation/demo_data/` 里三种**有错误**的预测（IDF1 0.825 / 0.9524、IDSW 4、FN 109），用来证明指标确实区分跟踪质量。自建 gate 体系照旧：帧级召回/精度（各 0.90 门槛）、人物发现率、最长连续漏检（10 帧）、错误合并次数、碎片数；`recovery_rate` 由 GT 的 `person_id` 在可见帧断口处**自动计算，无需人工标注**（`compute_recovery_rates`），分 0–2 秒 / 2–10 秒 / >10 秒三档，`run_evaluation` 默认就会传入 `gt_by_frame` / `pred_by_frame`。该值为 `None` 只有两种情形：直接调用 `gate2_continuity` 时未传 GT，或某一档没有可判定的「消失—重现」事件（分母为 0）。
-- **没有 TURN、没有做实时流**。逐帧离线处理，Web 端是 WebSocket 推进度 + base64 帧，不是 WebRTC，前端拿不到低延迟视频。
-- **单相机**。没有跨相机 ReID，多路视频只能各自建图。
-- **只有 legacy 前端**。`web/frontend` 是可用版本；未完成的 `frontend-v2` 脚手架未包含在本次发布中。
-- **OSNet 权重不入库**，缺失时回退 ResNet18，日志会打印 `[ReID] BoxMOT 不可用（…），回退 ResNet18`，ID 连续性会变差。
-- **依赖在线 LLM**。Agent 层需要 DeepSeek API，`--dry-run` 不依赖。
-- **实验脚本未整理**。`scripts/run_gate.py` 是评估的正式入口（见 `docs/evaluation.md`）；另几个是实验期的一次性脚本（`export_predictions.py`、`export_predictions_pipelined.py`、`build_full_eval.py`、`run_mot_sequences.py`、`benchmark_video.py`、`visualize_kg.py`）。源码里没有硬编码的绝对路径，输入路径与设备都走参数（`--video`、`--device`，默认 `auto`）。
+`scripts/run_gate.py` 是评估的正式入口，产出 Gate 0–2 报告（用法与口径见
+[docs/evaluation.md](docs/evaluation.md)）。同目录其余几个是实验期的一次性脚本，留着是为了让
+报告里的数字可回溯，不是日常入口：`export_predictions.py` / `export_predictions_pipelined.py`
+（导出逐帧预测）、`build_full_eval.py`（把每场景 300 帧扩成全序列）、`run_mot_sequences.py`
+（批量跑 MOT 格式序列）、`benchmark_video.py`（单视频速度基准）、`visualize_kg.py`（KG 子图可视化）。
+源码里没有硬编码的绝对路径，输入路径与设备都走参数（`--video`、`--device`，默认 `auto`）。
+
+## 设计取舍
+
+### 没有 TURN，也没有做实时流
+
+**为什么不做。** 逐帧离线处理，Web 端是 WebSocket 推进度 + 每 3 帧发一张 base64 帧，不是 WebRTC。
+TURN 是中继服务器：对称 NAT 下 WebRTC 必须靠它转发，代价是服务端要对每路视频解封装再封装、
+带宽翻倍，还要多维护一个常驻进程。本项目的目标场景是单机或局域网内的回看，P2P + STUN 够用。
+实时流则是另一种架构：需要 WebRTC 的硬件编码（H.264/VP8）与抖动缓冲，而这里的事件语义是
+「每 30 帧一个窗口」，实时化会把事件切成可变长度，跟踪与事件的判定口径都要重写。
+
+**代价。** 浏览器拿不到低延迟画面，只能看进度与处理完的帧；两台都在严格 NAT 后的机器之间无法直连。
+
+**什么时候需要。** 要接多点位直播、或要在浏览器里实时看画面时。扩展点在 `web/backend/main.py`
+的 WebSocket 消息类型（当前 `meta` / `agent_status` / `frame` / `progress` / `event` / `done` / `error`）：
+把 `frame` 那条通道换成 WebRTC 媒体轨即可，跟踪与事件层不用动。
+
+### 单相机
+
+**为什么不做跨相机。** 跨相机 ReID 不是「同一个跟踪器跑两路视频」，它先要解相机标定
+（内外参、跨镜头的空间对齐），再做全局 ID 分配（多路轨迹的时空一致性聚类）——两者的错误会被
+Entity 合并层层放大。当前实现把「ID 稳定」限定在**单镜头可见域内**：同一相机里遮挡后再出现能续上，
+出了画面就结束。用单相机换来的是 Entity 合并判定的可解释性（位置 / 时间 / 外观三项打分都有明确含义）。
+
+**代价。** 多路视频各自建图，同一个人在两个点位是两套 Entity，跨点位查询要人工对齐。
+
+**什么时候需要。** 多机位覆盖同一场地（商场多出入口、园区多点位）时。扩展点在
+`perception/entity_profile.py` 的合并打分：跨相机要新增一项相机间相对位置先验，并引入全局 ID 表。
+
+## 许可
+
+MIT，见 [LICENSE](LICENSE)。
