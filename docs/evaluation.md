@@ -16,8 +16,10 @@
   - 错误合并：同一帧内不同 GT 人物匹配到同一 Entity 的次数。
   - 碎片数：每个已发现 GT 人物对应过的不同 Entity 数（平均）。
 
-恢复率（Gate 2 的 95% / 80%）依赖人工连续性标注，当前恒为 `None`，
-需 `annotations/mot17_04/annotation.json` 才能计算。
+恢复率（Gate 2 的 95% / 80%）由 GT 的 `person_id` 在可见帧断口处**自动计算**
+（`compute_recovery_rates`），不需要人工标注。只有两种情况返回 `None`：没传
+`gt_by_frame` / `pred_by_frame`，或某一档（短/中/长间隔）没有可判定的「消失—重现」事件。
+需要人工标注的只有 Gate 2 的连续性判定（`gate2_continuity`），那是另一件事。
 
 ## 命令
 
