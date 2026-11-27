@@ -56,6 +56,16 @@ tracklet 会断，Entity 不该断。按 0.35 位置 + 0.30 时间 + 0.35 外观
 - `graph_store.py`：NetworkX DiGraph。属性统一 JSON 编解码，支持 upsert、子图、VF2 子图匹配、GraphML 存取；Event 节点带 `expires_at`，可按时间批量淘汰。
 - `continuity.py`：写 Event / Entity 节点和 `belongs_to`、`interacts_with`、`next` 边。同一对实体的交互边按事件聚合，保留最近 20 条证据，`confidence = min(1, 事件数 / 5)`，`duration` 由证据累加。
 - `rule_engine.py` + `kg_builder.py`：从 Behavior 节点生成规则（zone_type、速度区间、停留时长、方向变化），逐实体检查；`kg_builder` 让 LLM 产出行为模板与 Scene 节点。
+  **⚠️ 状态：已实现，但未接入默认管线。** 全仓没有一处 import 这两个模块（也零测试），
+  `pipeline.py` 不调用它们——默认 KG 只有 `graph_store` 的存储 + `continuity` 的写入，
+  **没有规则推理**。要用得手动接线：
+  `KGBuilder(llm, graph_store).build_behavior_templates(desc)` →
+  `generate_rules_from_template(bid)` → `RuleEngine(graph_store).add_rule(rule)` → `check_all(timestamp)`。
+  没接进主流程的原因不是「没排上」，而是**接上也是空转**：`RuleEngine.check_entity` 读
+  `motion_profile` / `velocity` / `first_seen` / `class` 这些 Entity 字段，而 `continuity.py`
+  写的 Entity 只有 `first_seen_frame` / `last_seen_frame` / `tracking_quality` 等；
+  `KGBuilder` 默认生成的规则 `zone_type` 是 `"*"`，Event 的 `zone_type` 实际是 `"full_frame"`。
+  两侧字段没对齐，所以它只能算一个可用的骨架，不能被当成现有能力读。
 
 ## 前置要求
 
@@ -105,7 +115,13 @@ python pipeline.py --source your_video.mp4 --dry-run --annotate --annotate-path 
 
 `--source 0` 接摄像头，`--source path/to/frames/` 接图片序列目录；`--dry-run` 只跑检测/跟踪/事件/KG，跳过 LLM。
 
-**这段示例视频跑出来的实际数字**（CPU，`--event-interval` 默认 30 帧）：8 秒切出 **6 个事件**；事件里出现过的 `track_id` 共 **7 个（2/3/5/7/8/9/11）**，`raw_tracks=12`，最终收敛成 **4 个 Entity**；每个事件内 1–3 个 tracklet、最多 1 条 `near` 空间关系；结束时 KG 有 **10 个节点（6 Event + 4 Entity）/ 19 条边**；`tracker metrics: drop_rate=0.0838 gap_rate=0.0479 id_switches=8 entities=4`。`id_switches=8` 偏高是这类合成素材的预期表现——纯色人形在交叉重叠和出画时外观特征几乎不可分，ReID 本来就该失败，这正是下面"遮挡必须上 ReID"那段要解决的问题；换真实监控素材会明显好转。
+**这段示例视频跑出来的实际数字**（`--event-interval` 默认 30 帧；2026-11-27 在 CUDA 上按下面的命令重跑，复现了同一组数）：8 秒切出 **6 个事件**；事件里出现过的 `track_id` 共 **7 个（2/3/5/7/8/9/11）**，`raw_tracks=12`，最终收敛成 **4 个 Entity**；每个事件内 1–3 个 tracklet、最多 1 条 `near` 空间关系；结束时 KG 有 **10 个节点（6 Event + 4 Entity）/ 19 条边**；`tracker metrics: drop_rate=0.0838 gap_rate=0.0479 id_switches=8 entities=4`。
+
+> **两个比率的口径**（容易对不上）：`0.0838 / 0.0479` 是**全片 200 帧**的累计口径，就是运行时最后打印的那一行。
+> 事件产物里每个事件存的是**截至该窗口末尾**的快照，最后一个事件只累计到 180 帧，那里是 `0.0917 / 0.0541`。
+> 同一份运行、两种分母，不是两套结果。后 20 帧凑不满一个 30 帧窗口，所以只有 6 个事件、`frame_count=180`。
+
+`id_switches=8` 偏高是这类合成素材的预期表现——纯色人形在交叉重叠和出画时外观特征几乎不可分，ReID 本来就该失败，这正是下面"遮挡必须上 ReID"那段要解决的问题；换真实监控素材会明显好转。
 
 **带 Agent 的完整链路**：
 
@@ -131,7 +147,14 @@ python pipeline.py --source your_video.mp4 --with-anomaly \
 
 ### 真实序列实测（MOT17 train，7 个序列）
 
-用项目自己的跟踪输出（`scripts/run_mot_sequences.py` 导出的 JSONL）在 MOT17 train 的 7 个序列上跑，单序列 3–4 秒：
+**先看前提：这批数字不是在完整序列上跑的。**
+
+> **口径**：预测来自 **`yolov8l.engine` / `imgsz=1920` / `conf=0.15` / `reid_interval=3`** 的一次外部批处理运行
+> （仓库外的实验目录里的 `MOT17-*-FRCNN.base.jsonl`，同目录 `.meta.json` 记录 `frames=300`；**这批产物不入库**）。
+> **每个序列只跑到 frame 299（前 298 帧）**，而 MOT17-02 / 04 / 05 的 GT 分别有 600 / 1050 / 837 帧，
+> 七个序列的帧覆盖率是 **28%–57%**。因此预测框只有 **28,129** 个，GT 有 **112,297** 个——预测是 GT 的 **25.0%**。
+> 这批文件**不是** `scripts/run_mot_sequences.py` 导出的：那条命令写的是 `<seq>.pred.jsonl`
+> 并使用 `yolov8l.pt`，与这里 `.base.jsonl` / `.engine` 的来源和参数都不是一回事。
 
 | 序列 | 帧数 | GT 框 | IDF1 | MOTA | HOTA | IDP | IDR | FP | FN | IDSW |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -147,8 +170,15 @@ python pipeline.py --source your_video.mp4 --with-anomaly \
 三点必须说清：
 
 - **这是逐序列单独算的结果，不是官方 MOTChallenge 提交成绩。** 官方用多序列聚合、以 test 集为准（test 集不公开 GT），这里只是把适配器在真实数据上跑通并给量级。
-- **召回低是跟踪器的真实表现，不是指标算错。** IDP 0.70 尚可，IDR 只有 0.17，说明喂给跟踪器的检测太少；MOT17-05 的 MOTA 为负，是因为 841 个 FP 相对 6917 个 GT 太多——MOTA 本就可以为负。
-- 这组数字和下面合成数据的 1.0 放在一起，正是「自测满分 ≠ 真实性能」的证据。
+- **召回低的主因是序列被截断，不能直接归因于检测器/跟踪器能力。** IDR 0.17、FN 91,492 看着像「跟踪器很差」，但预测只覆盖了 GT 框的 25%（帧覆盖 28%–57%），GT 里大半框所在的帧根本没有预测——**IDR 的上限先被覆盖率封顶**，任何跟踪器在这份数据上都拿不到高召回。IDP 0.70 说明「已经预测出来的框里精度尚可」；MOT17-05 的 MOTA 为负，是因为 841 个 FP 相对 6917 个 GT 太多（MOTA 本就可以为负）。**这组数字能证明「适配器在真实数据上跑通」，不能证明「跟踪器的召回能力只有 0.17」。**
+- 这组数字和下面合成数据的 1.0 放在一起，只能说明「真实数据 + 覆盖不全时指标会很难看」；它**不是**一份可对标的成绩，也不能拿 0.17 当性能结论引用。
+
+**要得到有意义的数字，需要同时满足：**
+
+1. **跑完整序列**：把整个 `img1/` 喂进跟踪器，而不是先截成 300 帧视频（`run_mot_sequences.py` 默认 `--max-frames 0` 就是全序列）；
+2. **用仓库默认命令**：`scripts/run_mot_sequences.py --root MOT17/train --pattern "MOT17-*-FRCNN" --limit 7`（导出 `<seq>.pred.jsonl`）；
+3. **GT 全量参与**：`evaluation/mot_metrics.py` 用完整 `gt/gt.txt`，帧号按默认 `--gt-frame-offset -1` 对齐；
+4. **把参数记进产物**：模型、`imgsz`、`conf`、`reid_interval`、帧范围写进 meta，否则下次还是没法判断数字能不能用。
 
 复现需要 GPU 和 MOT17 数据集（预测文件不入库：实验产物 + 体积）：
 
@@ -257,7 +287,8 @@ TURN 是中继服务器：对称 NAT 下 WebRTC 必须靠它转发，代价是�
 **代价。** 浏览器拿不到低延迟画面，只能看进度与处理完的帧；两台都在严格 NAT 后的机器之间无法直连。
 
 **什么时候需要。** 要接多点位直播、或要在浏览器里实时看画面时。扩展点在 `web/backend/main.py`
-的 WebSocket 消息类型（当前 `meta` / `agent_status` / `frame` / `progress` / `event` / `done` / `error`）：
+的 WebSocket 消息类型（当前 `meta` / `agent_status` / `pose_update` / `frame` / `progress` / `event` / `done` / `error`，
+共 8 种；`pose_update` 是姿态结果单独推送的通道，见 `web/backend/pipeline_runner.py`）：
 把 `frame` 那条通道换成 WebRTC 媒体轨即可，跟踪与事件层不用动。
 
 ### 单相机
