@@ -1,8 +1,9 @@
 # SceneSense
 输入一段监控视频（文件 / 摄像头 / 图片序列），输出带 `track_id` 的逐帧轨迹、每 30 帧切出的时空事件、中文场景报告，以及一份可用 GraphML 打开、可问答的场景知识图谱。
 
-> 架构图源在 [`docs/architecture.md`](docs/architecture.md)（三段 Mermaid），仓库未附导出的 PNG，可自行生成：
-> `npx @mermaid-js/mermaid-cli -i docs/architecture.md -o docs/architecture.png`
+![SceneSense 分层架构](docs/architecture.png)
+
+> 上图是感知层 → 实体层 → 事件层 → Agent 层 → KG 层的分层与数据流。Mermaid 源仍在 [`docs/architecture.md`](docs/architecture.md)（三段：整体架构 / 时序 / KG Schema）；重绘这张 PNG 用 `python docs/gen_architecture_png.py docs/architecture.png`（matplotlib，不依赖 Node）。
 
 ## 它解决什么问题
 
@@ -39,6 +40,8 @@ tracklet 会断，Entity 不该断。按 0.35 位置 + 0.30 时间 + 0.35 外观
 
 中心节点按 `trajectory → interaction → summary` 串行路由，每一步把前序所有 Agent 的 findings 塞进下一步上下文；结束后由中心统一收集 `kg_operations` 写入 GraphStore。**为什么不是链式**：链式 A→B→C 里 C 只能看到 B 的输出，想加第四个分析维度就得改链路；星型中心自己持有全部 `responses`，Agent 只依赖中心传进来的 context，因此可以单独替换或追加（`anomaly_agent.py` 就是这样独立写出来的，不碰路由代码），`reasoning_trail` 也能完整记下每个 Agent 的输入摘要和产出。
 
+**四个 Agent 怎么选**：默认路由仍是三个（`trajectory → interaction → summary`）；`python pipeline.py --with-anomaly …` 会把 `anomaly_agent` 按 `position=2` 插进 `Orchestrator.route_order`，形成 `trajectory → interaction → anomaly → summary`——异常评分先产出，总结阶段就能读到它。开关只动注册与路由顺序，四个 Agent 的内部逻辑一行没改。
+
 ### 6. 四个 Agent
 
 | Agent | 职责 | 关键取舍 |
@@ -63,7 +66,13 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
-**权重**：`yolov8n-pose.pt` 首次运行时 Ultralytics 自动下载；想要更好的 OSNet 特征，把 `osnet_x0_25_msmt17.pt` 放到 `models/`（或交给 BoxMOT 管理），缺失时回退 ImageNet ResNet18。
+**权重**：`yolov8n-pose.pt` 首次运行时 Ultralytics 自动下载；想要更好的 OSNet 特征，把 `osnet_x0_25_msmt17.pt` 放到 `models/`（或交给 BoxMOT 管理）。缺失时回退 ImageNet ResNet18，日志里会打印 `[ReID] BoxMOT 不可用（…），回退 ResNet18`——看到这行就说明 ID 连续性会变差。
+
+**示例视频（不需要自备素材）**：`assets/demo/sample.mp4` 是仓库自带的**合成监控素材**（1280×720 / 25fps / 8s / 1.3 MB），4 个几何绘制的行人，包含交叉遮挡、一人在画面中部低速徘徊、一人走出画面再回来。**不是真实监控画面，也不含任何人像。**
+
+```bash
+python pipeline.py --source assets/demo/sample.mp4 --dry-run --annotate --annotate-path outputs/demo.mp4
+```
 
 **跑通感知层（不需要 API Key）**：
 
@@ -73,11 +82,17 @@ python pipeline.py --source your_video.mp4 --dry-run --annotate --annotate-path 
 
 `--source 0` 接摄像头，`--source path/to/frames/` 接图片序列目录；`--dry-run` 只跑检测/跟踪/事件/KG，跳过 LLM。
 
+**这段示例视频跑出来的实际数字**（CPU，`--event-interval` 默认 30 帧）：8 秒切出 **6 个事件**；事件里出现过的 `track_id` 共 **7 个（2/3/5/7/8/9/11）**，`raw_tracks=12`，最终收敛成 **4 个 Entity**；每个事件内 1–3 个 tracklet、最多 1 条 `near` 空间关系；结束时 KG 有 **10 个节点（6 Event + 4 Entity）/ 19 条边**；`tracker metrics: drop_rate=0.0838 gap_rate=0.0479 id_switches=8 entities=4`。`id_switches=8` 偏高是这类合成素材的预期表现——纯色人形在交叉重叠和出画时外观特征几乎不可分，ReID 本来就该失败，这正是下面"遮挡必须上 ReID"那段要解决的问题；换真实监控素材会明显好转。
+
 **带 Agent 的完整链路**：
 
 ```bash
 set DEEPSEEK_API_KEY=sk-...        # Linux/macOS: export DEEPSEEK_API_KEY=...
 python pipeline.py --source your_video.mp4 --model yolov8n-pose.pt \
+  --output outputs/results.json --kg-path outputs/scene.graphml
+
+# 额外接上异常检测 Agent（路由变成 trajectory → interaction → anomaly → summary）
+python pipeline.py --source your_video.mp4 --with-anomaly \
   --output outputs/results.json --kg-path outputs/scene.graphml
 ```
 
@@ -107,8 +122,7 @@ python -m pytest -q
 - **没有标准 MOT 指标**。没有跑出 IDF1 / MOTA / HOTA。`evaluation/` 是自建 gate 体系：帧级召回/精度（各 0.90 门槛）、人物发现率、最长连续漏检（10 帧）、错误合并次数、碎片数；`recovery_rate` 依赖人工连续性标注，当前显式返回 `None`。要标准指标需自备 MOT17，并用 py-motmetrics 或 TrackEval 重跑。
 - **没有 TURN、没有做实时流**。逐帧离线处理，Web 端是 WebSocket 推进度 + base64 帧，不是 WebRTC，前端拿不到低延迟视频。
 - **单相机**。没有跨相机 ReID，多路视频只能各自建图。
-- **AnomalyAgent 未接入默认路由**。`pipeline.py` 只注册了 trajectory / interaction / summary 三个。
 - **只有 legacy 前端**。`web/frontend` 是可用版本；未完成的 `frontend-v2` 脚手架未包含在本次发布中。
-- **OSNet 权重不入库**，缺失时静默回退 ResNet18，ID 连续性会变差。
+- **OSNet 权重不入库**，缺失时回退 ResNet18，日志会打印 `[ReID] BoxMOT 不可用（…），回退 ResNet18`，ID 连续性会变差。
 - **依赖在线 LLM**。Agent 层需要 DeepSeek API，`--dry-run` 不依赖。
 - **实验脚本未整理**。`scripts/` 里多数是一次性入口，参数依赖本机 GPU 与绝对路径。

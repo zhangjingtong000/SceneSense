@@ -362,30 +362,42 @@ class AnomalyAgent(BaseAgent):
         pattern_type = template["pattern_type"]
         keywords = template["keywords"]
 
+        # 轨迹/交互 Agent 的 finding.value 可能是结构化 dict（如 {"label": "徘徊"}）
+        # 或中文描述串；这里统一取成文本，否则下面按关键词求交集会崩。
+        def _as_text(value: Any) -> str:
+            if isinstance(value, dict):
+                for key in ("label", "description", "value"):
+                    text = value.get(key)
+                    if isinstance(text, str) and text:
+                        return text
+                return ""
+            return value if isinstance(value, str) else ""
+
         # 将实体状态转为关键词
         entity_keywords: list[str] = []
 
         # 运动模式关键词
-        if motion.get("pattern"):
-            entity_keywords.append(motion["pattern"])
-            if motion["pattern"] == "loitering":
+        pattern = _as_text(motion.get("pattern"))
+        if pattern:
+            entity_keywords.append(pattern)
+            if pattern == "loitering":
                 entity_keywords.extend(
                     ["low_speed", "direction_change"]
                 )
-            elif motion["pattern"] == "running":
+            elif pattern == "running":
                 entity_keywords.append("high_speed")
-            elif motion["pattern"] == "erratic":
+            elif pattern == "erratic":
                 entity_keywords.extend(
                     ["direction_change", "unpredictable"]
                 )
-            elif motion["pattern"] == "stationary":
+            elif pattern == "stationary":
                 entity_keywords.append("prolonged_stay")
-            elif motion["pattern"] == "walking":
+            elif pattern == "walking":
                 entity_keywords.append("normal_speed")
 
         # 交互关键词
         for inter in interactions:
-            inter_type = inter.get("type", "")
+            inter_type = _as_text(inter.get("type"))
             if inter_type == "following":
                 entity_keywords.extend(
                     ["following", "same_path", "proximity"]

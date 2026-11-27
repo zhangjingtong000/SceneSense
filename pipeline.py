@@ -27,6 +27,7 @@ from agents.env import get_local_env
 from agents.trajectory_agent import TrajectoryAgent
 from agents.interaction_agent import InteractionAgent
 from agents.summary_agent import SummaryAgent
+from agents.anomaly_agent import AnomalyAgent
 from agents.orchestrator import Orchestrator
 from kg.continuity import write_continuity_event
 from kg.graph_store import GraphStore
@@ -125,6 +126,7 @@ class Pipeline:
         imgsz: int = 640,
         annotate: bool = False,
         annotate_path: str = "annotated.mp4",
+        with_anomaly: bool = False,
     ):
         self.source = source
         self.event_interval_frames = event_interval_frames
@@ -138,6 +140,7 @@ class Pipeline:
         self.imgsz = imgsz
         self.annotate = annotate
         self.annotate_path = annotate_path
+        self.with_anomaly = with_anomaly
         self._writer = None  # cv2.VideoWriter, 延迟初始化
         self._last_keypoints: list[list[list[float]]] = []
 
@@ -159,6 +162,10 @@ class Pipeline:
             self.orchestrator.register_agent(TrajectoryAgent(self.llm))
             self.orchestrator.register_agent(InteractionAgent(self.llm))
             self.orchestrator.register_agent(SummaryAgent(self.llm))
+
+            # 5. 可选：异常检测 Agent（插在 summary_agent 之前，让总结能看到 raw_score）
+            if self.with_anomaly:
+                self.orchestrator.register_agent(AnomalyAgent(self.llm), position=2)
 
         # 感知层（两阶段：检测 + 姿态）
         self.detector = YOLODetector(
@@ -374,6 +381,10 @@ class Pipeline:
         print(f"  [置信度] TA={output['agent_summary']['trajectory_agent_confidence']:.2f} "
               f"IA={output['agent_summary']['interaction_agent_confidence']:.2f} "
               f"SA={output['agent_summary']['summary_agent_confidence']:.2f}")
+        if self.with_anomaly:
+            aa_findings = self.orchestrator.responses.get("anomaly_agent", {}).get("findings", [])
+            aa_conf = output["agent_summary"].get("anomaly_agent_confidence", 0)
+            print(f"  [异常] AA={aa_conf:.2f} findings={len(aa_findings)}")
 
         # KG 清理
         now = time.time()
@@ -459,6 +470,8 @@ def main():
                         help="输出骨架标注视频")
     parser.add_argument("--annotate-path", default="annotated.mp4",
                         help="标注视频输出路径")
+    parser.add_argument("--with-anomaly", action="store_true",
+                        help="额外启用 anomaly_agent（插在 summary_agent 之前）")
     args = parser.parse_args()
 
     classes = [int(c.strip()) for c in args.classes.split(",") if c.strip()] if args.classes else None
@@ -482,6 +495,7 @@ def main():
         imgsz=args.imgsz,
         annotate=args.annotate,
         annotate_path=args.annotate_path,
+        with_anomaly=args.with_anomaly,
     )
     pipeline.run()
 

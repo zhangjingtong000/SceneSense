@@ -60,6 +60,8 @@ samples/*.mp4
 *.avi
 *.mkv
 *.mov
+# 仓库自带的合成示例视频（无人像、约 1 MB），是演示素材而非生成产物
+!assets/demo/sample.mp4
 
 # ---- 内部工具链与 AI 协作痕迹 ----
 .claude/

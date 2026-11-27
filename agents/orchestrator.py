@@ -68,14 +68,30 @@ class Orchestrator:
         self.llm = llm_client
         self.kg = kg_api if kg_api is not None else MockKGAPI()
         self.agents: dict[str, BaseAgent] = {}
+        # 实际路由顺序。默认与 ROUTE_ORDER 一致；注册可选 Agent 时可按位置插入
+        # （例如 anomaly_agent 插在 summary_agent 之前，让总结能看到异常评分）。
+        self.route_order: list[str] = list(self.ROUTE_ORDER)
 
         self.event: dict = {}
         self.responses: dict[str, dict] = {}
         self.route_history: list[str] = []
         self._trail: list[dict] = []
 
-    def register_agent(self, agent: BaseAgent):
+    def register_agent(self, agent: BaseAgent, position: int | None = None):
+        """注册 Agent。
+
+        Args:
+            agent: 分析 Agent。
+            position: 插入 route_order 的位置；None 表示追加到末尾。
+                可选 Agent（如 anomaly_agent）用 position=2 插到 summary_agent 之前。
+        """
         self.agents[agent.name] = agent
+        if agent.name in self.route_order:
+            return
+        if position is None:
+            self.route_order.append(agent.name)
+        else:
+            self.route_order.insert(position, agent.name)
 
     def process_event(self, event: dict) -> dict:
         """处理一个 SpatioTemporalEvent，返回 scene_report。"""
@@ -86,7 +102,7 @@ class Orchestrator:
 
         scene_context = self._query_scene_context(event)
 
-        for agent_name in self.ROUTE_ORDER:
+        for agent_name in self.route_order:
             if agent_name not in self.agents:
                 continue
             context = self._build_context(agent_name, scene_context)
@@ -196,6 +212,9 @@ class Orchestrator:
                 "interaction_agent_confidence": inter.get("agent_confidence", 0),
                 "interaction_agent_warnings": inter.get("warnings", []),
                 "summary_agent_confidence": summary.get("agent_confidence", 0),
+                "anomaly_agent_confidence": self.responses.get("anomaly_agent", {}).get(
+                    "agent_confidence", 0
+                ),
             },
             "kg_updates": kg_updates,
         }
@@ -239,5 +258,8 @@ class Orchestrator:
 
         for name, resp in self.responses.items():
             context["previous_findings"].append({"source": name, "finding": resp})
+
+        # 完整的结构化响应，供 anomaly_agent 直接读取轨迹/交互的 findings
+        context["all_agent_responses"] = dict(self.responses)
 
         return context
