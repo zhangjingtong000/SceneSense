@@ -53,5 +53,10 @@ jobs:
       - name: 安装依赖
         run: python -m pip install -r requirements.txt ruff
 
+      # requirements.txt 把 Web 相关依赖列为可选（注释掉），但 tests/web/ 会 import
+      # fastapi 与 starlette.testclient（依赖 httpx），这里显式补装，避免收集期报错。
+      - name: 装 web 依赖
+        run: python -m pip install fastapi uvicorn python-multipart httpx
+
       - name: 测试
         run: python -m pytest -q
