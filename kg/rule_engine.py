@@ -109,3 +109,33 @@ class RuleEngine:
                 if event is not None:
                     return event.get("zone_type")
         return None
+
+
+def default_rules() -> list[dict]:
+    """内置的一组演示规则。
+
+    这些规则是「规则引擎能跑起来」的最小集合，不是某个场景的完整规则库。
+    每条规则的 `conditions` 键与 `RuleEngine.check_entity` 里的分支一一对应：
+    `motion_profile`（英文运动标签）、`max_stay_seconds`（停留超过阈值才算命中）、
+    `velocity_max` / `velocity_min`、`direction_change_max`、`zone_type`、`class`。
+    """
+    return [
+        {
+            "rule_id": "R-LOITER-60",
+            "description": "在区域内徘徊且停留超过 60 秒",
+            "severity": 0.6,
+            "conditions": {"motion_profile": "loitering", "max_stay_seconds": 60},
+        },
+        {
+            "rule_id": "R-RUN",
+            "description": "出现奔跑（可能是追逐或逃离）",
+            "severity": 0.7,
+            "conditions": {"motion_profile": "running"},
+        },
+        {
+            "rule_id": "R-STATIC-120",
+            "description": "静止超过 120 秒（可能晕倒或物品遗弃）",
+            "severity": 0.5,
+            "conditions": {"motion_profile": "stationary", "max_stay_seconds": 120},
+        },
+    ]

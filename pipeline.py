@@ -127,6 +127,7 @@ class Pipeline:
         annotate: bool = False,
         annotate_path: str = "annotated.mp4",
         with_anomaly: bool = False,
+        with_rules: bool = False,
     ):
         self.source = source
         self.event_interval_frames = event_interval_frames
@@ -141,6 +142,7 @@ class Pipeline:
         self.annotate = annotate
         self.annotate_path = annotate_path
         self.with_anomaly = with_anomaly
+        self.with_rules = with_rules
         self._writer = None  # cv2.VideoWriter, 延迟初始化
         self._last_keypoints: list[list[list[float]]] = []
 
@@ -166,6 +168,18 @@ class Pipeline:
             # 5. 可选：异常检测 Agent（插在 summary_agent 之前，让总结能看到 raw_score）
             if self.with_anomaly:
                 self.orchestrator.register_agent(AnomalyAgent(self.llm), position=2)
+
+            # 6. 可选：规则引擎。它读的是 Agent 写进 KG 的 Entity 属性
+            #（motion_profile / velocity / direction_change_count / first_seen / class），
+            # 所以必须在 Agent 之后执行；`_process_event` 里就是这么排的。
+            self.rule_engine = None
+            if self.with_rules:
+                from kg.rule_engine import RuleEngine, default_rules
+
+                self.rule_engine = RuleEngine(self.graphstore)
+                for rule in default_rules():
+                    self.rule_engine.add_rule(rule)
+                print(f"规则引擎：已加载 {len(default_rules())} 条内置规则")
 
         # 感知层（两阶段：检测 + 姿态）
         self.detector = YOLODetector(
@@ -362,6 +376,17 @@ class Pipeline:
 
         output = self.orchestrator.process_event(event)
 
+        # 规则引擎：必须排在 Agent 之后——它读的是 Agent 刚写进 KG 的 Entity 属性
+        #（motion_profile / velocity / direction_change_count / first_seen / class）。
+        # 之前这套代码没被任何地方调用，等于空转；现在用 --with-rules 显式开启。
+        if self.rule_engine is not None:
+            rule_hits = self.rule_engine.check_all(float(event.get("timestamp", 0.0)))
+            if rule_hits:
+                output.setdefault("rule_hits", []).extend(rule_hits)
+                for hit in rule_hits:
+                    print(f"  [规则] {hit['rule_id']} {hit['rule_description']} "
+                          f"entity={hit.get('entity_id')}")
+
         # 打印推理链
         trail = output.get("reasoning_trail", [])
         print(f"  [推理链]")
@@ -472,6 +497,8 @@ def main():
                         help="标注视频输出路径")
     parser.add_argument("--with-anomaly", action="store_true",
                         help="额外启用 anomaly_agent（插在 summary_agent 之前）")
+    parser.add_argument("--with-rules", action="store_true",
+                        help="启用规则引擎（kg/rule_engine.py 的 3 条内置规则）")
     args = parser.parse_args()
 
     classes = [int(c.strip()) for c in args.classes.split(",") if c.strip()] if args.classes else None
@@ -496,6 +523,7 @@ def main():
         annotate=args.annotate,
         annotate_path=args.annotate_path,
         with_anomaly=args.with_anomaly,
+        with_rules=args.with_rules,
     )
     pipeline.run()
 

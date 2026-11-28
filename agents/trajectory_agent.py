@@ -179,6 +179,14 @@ class TrajectoryAgent(BaseAgent):
                     "properties": {
                         "motion_description": desc_text,
                         "motion_label": data.get("label", "unknown"),
+                        # 下面几项是 RuleEngine 的匹配依据。不写的话规则引擎即使被调用，
+                        # 也只会看到 None 然后一条都匹配不上（此前就是这样空转的）。
+                        "motion_profile": data.get("motion_profile", "unknown"),
+                        "velocity": data.get("normalized_speed", 0.0),
+                        "direction_change_count": data.get("direction_change", 0),
+                        "first_seen": tracklet.get("first_seen_ts", time.time()),
+                        "class": tracklet.get("class", tracklet.get("category", "person")),
+                        "active": True,
                         "last_analyzed": time.time(),
                     },
                 }],
@@ -210,7 +218,8 @@ class TrajectoryAgent(BaseAgent):
         if len(trajectory) < 2:
             return {"label": "未知", "confidence": 0.3, "evidence": ["轨迹点<2"],
                     "speed_px": 0, "normalized_speed": 0, "speed_pct": 50,
-                    "speed_level": "未知", "direction_change": 0, "pose": "", "duration": 0}
+                    "speed_level": "未知", "direction_change": 0, "pose": "",
+                    "duration": 0, "motion_profile": "unknown"}
 
         speeds: list[float] = []
         dirs: list[float] = []
@@ -284,6 +293,9 @@ class TrajectoryAgent(BaseAgent):
         )
         return {
             "label": self._LABEL_MAP.get(label, label),
+            # 英文键留给规则引擎用：`RuleEngine` 的 conditions["motion_profile"]
+            # 比对的是英文标签（stationary/loitering/walking/...），不是中文显示名。
+            "motion_profile": label,
             "confidence": conf,
             "speed_px": round(effective_speed, 1),
             "normalized_speed": round(normalized_speed, 3),

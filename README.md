@@ -55,12 +55,13 @@ tracklet 会断，Entity 不该断。按 0.35 位置 + 0.30 时间 + 0.35 外观
 
 - `graph_store.py`：NetworkX DiGraph。属性统一 JSON 编解码，支持 upsert、子图、VF2 子图匹配、GraphML 存取；Event 节点带 `expires_at`，可按时间批量淘汰。
 - `continuity.py`：写 Event / Entity 节点和 `belongs_to`、`interacts_with`、`next` 边。同一对实体的交互边按事件聚合，保留最近 20 条证据，`confidence = min(1, 事件数 / 5)`，`duration` 由证据累加。
-- `rule_engine.py` + `kg_builder.py`：从 Behavior 节点生成规则（zone_type、速度区间、停留时长、方向变化），逐实体检查；`kg_builder` 让 LLM 产出行为模板与 Scene 节点。
-  **⚠️ 状态：已实现，但未接入默认管线。** 全仓没有一处 import 这两个模块（也零测试），
-  `pipeline.py` 不调用它们——默认 KG 只有 `graph_store` 的存储 + `continuity` 的写入，
-  **没有规则推理**。要用得手动接线：
-  `KGBuilder(llm, graph_store).build_behavior_templates(desc)` →
-  `generate_rules_from_template(bid)` → `RuleEngine(graph_store).add_rule(rule)` → `check_all(timestamp)`。
+- `rule_engine.py` + `kg_builder.py`：规则引擎按 `zone_type`、速度区间、停留时长、方向变化逐实体检查；`kg_builder` 让 LLM 产出行为模板与 Scene 节点。
+  **`rule_engine` 已接入管线**：`pipeline.py --with-rules` 会在 Agent 写完之后调用 `RuleEngine.check_all()`，
+  命中结果挂在 `output["rule_hits"]` 上并打印。内置 3 条规则（`kg/rule_engine.py::default_rules()`）：
+  徘徊超 60 秒、奔跑、静止超 120 秒。这些规则依赖 Entity 节点的 `motion_profile` / `velocity` /
+  `direction_change_count` / `first_seen` / `class` 字段，`trajectory_agent` 现在会把它们写进去
+  ——之前没写，所以引擎即使被调用也一条都匹配不上。
+  `kg_builder`（LLM 生成行为模板）仍未接主流程，需要时手动调用。
   没接进主流程的原因不是「没排上」，而是**接上也是空转**：`RuleEngine.check_entity` 读
   `motion_profile` / `velocity` / `first_seen` / `class` 这些 Entity 字段，而 `continuity.py`
   写的 Entity 只有 `first_seen_frame` / `last_seen_frame` / `tracking_quality` 等；
