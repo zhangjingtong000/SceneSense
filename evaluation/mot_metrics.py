@@ -232,8 +232,6 @@ def _motmetrics_block(
             "unavailable（pip install motmetrics 后才能算 IDF1/MOTA）",
         )
 
-    import numpy as np
-
     acc = mm.MOTAccumulator(auto_id=True)
     for frame in frames:
         gts = gt_by_frame.get(frame, ())

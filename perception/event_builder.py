@@ -1,5 +1,3 @@
-import hashlib
-import json
 import math
 
 import cv2
@@ -10,6 +8,15 @@ from utils.serialization import to_jsonable
 
 class EventBuilder:
     _next_id = 1
+
+    @classmethod
+    def reset_ids(cls) -> None:
+        """把事件编号计数器归零。
+
+        编号存在类变量上，Web 后端同一个进程里会连续跑多个视频；不重置的话
+        第二个视频从 Event-7 开始，前端按编号排序 / 去重就错位。
+        """
+        cls._next_id = 1
 
     def __init__(
         self,

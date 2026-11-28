@@ -10,7 +10,6 @@ import argparse
 import json
 import os
 import signal
-import sys
 import time
 from datetime import datetime
 
@@ -199,6 +198,8 @@ class Pipeline:
             reid_interval=1,
         )
         # spatial_neighbor_threshold 用像素值（无相机标定时 approximate 100px≈2-3m）
+        # 事件编号是类变量：每次开跑都从 Event-1 起，避免同进程第二次分析接着数
+        EventBuilder.reset_ids()
         self.event_builder = EventBuilder(
             event_interval_frames=event_interval_frames,
             spatial_neighbor_threshold_m=100.0,  # pixels, not meters until calibrated
@@ -392,7 +393,7 @@ class Pipeline:
 
         # 打印推理链
         trail = output.get("reasoning_trail", [])
-        print(f"  [推理链]")
+        print("  [推理链]")
         for step in trail:
             print(f"    ├─ {step['agent']}")
             print(f"    │  输入: {step['input_summary']}")
@@ -434,7 +435,6 @@ class Pipeline:
         if getattr(self, '_shutting_down', False):
             return
         self._shutting_down = True
-        was_running = self.running
         self.running = False
         print(f"\n{'='*60}")
         print(f"Shutting down. Processed {len(self._results)} events.")

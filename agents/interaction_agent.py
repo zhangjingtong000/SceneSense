@@ -7,7 +7,6 @@ v2: 基于 benchmark 验证的特征提取 + 跳变检测 → 分类为 结伴�
 """
 
 import math
-from typing import Any
 
 import numpy as np
 
@@ -56,7 +55,6 @@ def _compute_pair_features(
     for sa in segs_a:
         for sb in segs_b:
             # 找两条轨迹的时间重叠帧
-            times_a = {pt[2] for pt in sa}
             sync_pairs = []
             for pt_b in sb:
                 t = pt_b[2]
@@ -165,7 +163,6 @@ class InteractionAgent(BaseAgent):
         """
         tracklets = self.context.get("tracklets", [])
         spatial_relations = self.context.get("spatial_relations", [])
-        tracklet_map: dict[int, dict] = {t.get("track_id", 0): t for t in tracklets}
 
         entity_map: dict[int, str] = {}
         for t in tracklets:
@@ -568,7 +565,9 @@ class InteractionAgent(BaseAgent):
         )
         try:
             result = self.llm.chat_with_json_output(
-                system_prompt="你是视频监控交互分析助手。仅输出 JSON。",
+                # system prompt 来自 prompts/interaction.md —— 这是全流程唯一送给模型的
+                # prompt 文件，不再是「读进来放着」的死代码。
+                system_prompt=self.system_prompt or "你是视频监控交互分析助手。仅输出 JSON。",
                 user_prompt=prompt,
             )
             if "error" not in result:

@@ -429,10 +429,11 @@ fused_severity = anomaly_agent.raw_score × 0.5
 {"next": "agent_name | FINAL_ANSWER", "guidance": "...", "comment": "..."}
 ```
 
-> **Prompt 模板未接入运行时**：`agents/prompts/*.md` 这 5 个文件只在构造 Agent 时被
-> `_load_prompt()` 读进 `self.system_prompt` 字段；真正调用模型的地方
-> （`interaction_agent._llm_classify_pair`）用的是硬编码的 system prompt，
-> 所以本节（以及 5.1–5.3）目前只是设计文档，不是实际输入。
+> **Prompt 模板现状**：`agents/prompts/` 下现在只剩 `interaction.md` 一个文件，而且真的接上了——
+> `interaction_agent._llm_classify_pair` 用 `self.system_prompt`（即它的内容）作为 system prompt。
+> 另外四个模板（trajectory / summary / anomaly / orchestrator）对应的 Agent 根本不调模型，
+> 已随这轮清理删除；`trajectory_agent._llm_refine()` 同属零调用死代码，也已删除。
+> 因此本节（以及 5.1–5.3）里描述的多 Agent prompt 协商仍只是设计文档，不是实际输入。
 
 ## 6. 实现阶段清单
 

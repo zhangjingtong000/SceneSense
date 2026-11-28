@@ -112,8 +112,8 @@ def visualize(
 
     legend1 = plt.legend(handles=node_legend, title="Nodes", loc="upper left",
                          bbox_to_anchor=(1.02, 1))
-    legend2 = plt.legend(handles=edge_legend, title="Edges", loc="upper left",
-                         bbox_to_anchor=(1.02, 0.5))
+    plt.legend(handles=edge_legend, title="Edges", loc="upper left",
+               bbox_to_anchor=(1.02, 0.5))
     plt.gca().add_artist(legend1)
 
     plt.title(title, fontsize=14)

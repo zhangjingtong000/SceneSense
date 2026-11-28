@@ -7,7 +7,6 @@
 import math
 import time
 from collections import deque
-from typing import Any
 
 from .base_agent import BaseAgent
 from .llm_client import LLMClient
@@ -131,14 +130,13 @@ class TrajectoryAgent(BaseAgent):
     """
 
     def __init__(self, llm_client: LLMClient) -> None:
-        prompt = self._load_prompt("trajectory")
-        super().__init__("trajectory_agent", llm_client, prompt)
+        # 纯规则 Agent：不调模型，因此没有 system prompt（原来的 prompts/trajectory.md 已删）
+        super().__init__("trajectory_agent", llm_client, "")
         self.normalizer = VelocityNormalizer()
 
     def think(self) -> dict:
         """对每个活跃目标生成结构化运动数据。"""
         tracklets = self.context.get("tracklets", [])
-        scene_type = self.context.get("scene_type", "unknown")
 
         all_speeds: list[float] = []
         for t in tracklets:
@@ -350,21 +348,3 @@ class TrajectoryAgent(BaseAgent):
                 parts.append("姿态可辨识")
 
         return "，".join(parts) if parts else ""
-
-    def _llm_refine(self, tracklet: dict, scene_type: str) -> dict | None:
-        """轨迹数据不足或边界情况时调用 LLM 补充描述。"""
-        entity_id = f"Entity-{tracklet.get('track_id', 0)}"
-        user_prompt = (
-            f"Describe the motion of {entity_id} in {scene_type} scene:\n"
-            f"velocity={tracklet.get('velocity_ms', 'N/A')}px/s,\n"
-            f"direction={tracklet.get('direction_deg', 'N/A')}°,\n"
-            f"trajectory_points={len(tracklet.get('trajectory', []))}\n\n"
-            "Describe the movement in one natural language sentence.\n"
-            'Output JSON: {"description": str, "confidence": float}'
-        )
-        result = self.llm.chat_with_json_output(
-            system_prompt=self.system_prompt, user_prompt=user_prompt
-        )
-        if "error" not in result:
-            return result
-        return None

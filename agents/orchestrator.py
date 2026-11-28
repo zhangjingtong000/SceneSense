@@ -6,7 +6,6 @@
 输出: scene_report
 """
 
-import time
 import uuid
 from datetime import datetime
 from typing import Any

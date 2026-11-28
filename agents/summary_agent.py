@@ -6,7 +6,6 @@
 """
 
 import time
-from typing import Any
 
 from .base_agent import BaseAgent
 from .llm_client import LLMClient
@@ -20,8 +19,8 @@ class SummaryAgent(BaseAgent):
     """
 
     def __init__(self, llm_client: LLMClient) -> None:
-        prompt = self._load_prompt("summary")
-        super().__init__("summary_agent", llm_client, prompt)
+        # 纯字符串模板，不调模型：没有 system prompt（原 prompts/summary.md 已删）
+        super().__init__("summary_agent", llm_client, "")
 
     def think(self) -> dict:
         """综合前两个 Agent 的发现，生成场景摘要。

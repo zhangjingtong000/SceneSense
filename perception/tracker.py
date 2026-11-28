@@ -1,4 +1,4 @@
-﻿"""
+"""
 Hybrid tracker: BoT-SORT architecture with GMC + ReID + Kalman Filter.
 
 Replaces supervision ByteTrack. Same update() interface for drop-in compatibility.
@@ -125,9 +125,11 @@ class GMC:
 class ReIDExtractor:
     """Extracts appearance embeddings from person crops.
 
-    优先使用 torchreid 的 OSNet（MSMT17 预训练）+ 自实现的 cv2 批量预处理，
-    比 BoxMOT 的 encode 链路快约 1.3x；torchreid 不可用时回退 BoxMOT，
-    再不可用则回退 ImageNet ResNet18。
+    权重来源按优先级：`models/osnet_x0_25_msmt17.pt`（本地，放在仓库根下的 models/ 即可）
+    → BoxMOT 自动管理（会尝试从 Google Drive 拉权重）→ ImageNet ResNet18。
+
+    前两条都走 OSNet x0.25（MSMT17）：本地权重存在时用 torchreid + 自实现 cv2 批量预处理，
+    比 BoxMOT 的 encode 链路快约 1.3x；本地权重不存在或 torchreid 缺失时交给 BoxMOT。
     所有后端都返回 512 维 L2 归一化特征。
     """
 
@@ -140,6 +142,13 @@ class ReIDExtractor:
         self._osnet = None
         self._osnet_model = None
         self._dummy = torch.zeros(1, 512)
+
+        # models/ 里有权重就优先用本地链路。否则默认的 'osnet' 会整个交给 BoxMOT，
+        # 由它自己去 Google Drive 拉权重（实测超时后静默回退 ResNet18），
+        # README 里「把 osnet_x0_25_msmt17.pt 放进 models/」的指引就落空了。
+        if backbone == 'osnet' and self._OSNET_WEIGHTS.exists():
+            print(f"[ReID] 发现本地权重 {self._OSNET_WEIGHTS.name}，优先走 torchreid 本地链路")
+            backbone = 'osnet_fast'
 
         if backbone == 'osnet':
             # 默认走 BoxMOT（端到端实测更稳）；'osnet_fast' 可选自实现链路
@@ -354,7 +363,6 @@ class Track:
         x, y, x2, y2 = bbox_xyxy
         w, h = x2 - x, y2 - y
         cx, cy = x + w / 2, y + h / 2
-        kf = KalmanFilter(dim_x=8, dim_z=4)
         mean = np.array([cx, cy, w, h, 0, 0, 0, 0], dtype=np.float64)
         cov = np.eye(8) * 10.0
         cov[4:, 4:] *= 1000.0
@@ -675,7 +683,6 @@ class MultiObjectTracker:
         low_idx = np.where(low_mask)[0]
         if len(stage2_tracks) > 0 and len(low_idx) > 0:
             low_boxes = bboxes_xyxy[low_idx]
-            low_sc = scores[low_idx]
             iou_dists = self._iou_distance(stage2_tracks, low_boxes)
             # 经验：让外观独立救回低分框会引入错误关联（恢复率反而下降），
             # 因此这里只用 IoU，外观在 stage1 已经参与过。
@@ -712,8 +719,6 @@ class MultiObjectTracker:
         unassigned_high = [i for i in high_idx if i not in assigned_dets]
         if len(unconfirmed) > 0 and len(unassigned_high) > 0:
             uh_boxes = bboxes_xyxy[unassigned_high]
-            uh_sc = scores[unassigned_high]
-            uh_ft = features[unassigned_high]
             iou_dists = self._iou_distance(unconfirmed, uh_boxes)
             matches, u_unconf, remaining_dets = self._match(iou_dists, thresh=0.7)
             for ti, di in matches:

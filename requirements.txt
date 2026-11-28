@@ -21,10 +21,6 @@ openai>=1.0               # DeepSeek（OpenAI 兼容接口）
 # uvicorn[standard]>=0.27
 # python-multipart>=0.0.9
 
-# ---- 可选：VLM 客户端（agents/vlm_client.py、agents/doubao_vlm_client.py）----
-# Pillow>=10.0
-# requests>=2.31
-
 # ---- 可选：标准 MOT 指标（evaluation/mot_metrics.py）----
 # motmetrics>=1.4         # IDF1 / MOTA / IDP / IDR；缺失时这些字段为 None
 # trackeval>=1.3          # HOTA；缺失时 hota 字段为 None。注意它的 numpy 声明会

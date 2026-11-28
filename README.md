@@ -1,9 +1,30 @@
 # SceneSense
 输入一段监控视频（文件 / 摄像头 / 图片序列），输出带 `track_id` 的逐帧轨迹、每 30 帧切出的时空事件、中文场景报告，以及一份可用 GraphML 打开、可问答的场景知识图谱。
 
+> ## ⚠️ 许可证：自身 MIT，但与 AGPL-3.0 依赖组合后整体受 AGPL 约束
+>
+> 本项目**自身代码**（`perception/`、`agents/`、`kg/`、`web/`、`pipeline.py`）以 **MIT** 发布，见 [LICENSE](LICENSE)。
+> 但依赖的 **`ultralytics`（YOLOv8）与 `boxmot` 采用 AGPL-3.0**。因此把本项目与这些依赖
+> **组合分发**、或**作为网络服务提供**时，整体受 **AGPL-3.0** 约束（需提供整体源码，
+> 网络服务用户有权获取对应源码）。
+> **如需闭源商用**，需替换检测 / ReID 实现，或向 Ultralytics 与 boxmot 作者取得商业授权。
+> 完整的依赖与许可清单见 [THIRD-PARTY.md](THIRD-PARTY.md)。
+
 ![SceneSense 分层架构](docs/architecture.png)
 
 > 上图是感知层 → 实体层 → 事件层 → Agent 层 → KG 层的分层与数据流。Mermaid 源仍在 [`docs/architecture.md`](docs/architecture.md)（三段：整体架构 / 时序 / KG Schema）；重绘这张 PNG 用 `python docs/gen_architecture_png.py docs/architecture.png`（matplotlib，不依赖 Node）。
+
+## 跑起来长什么样
+
+| Web 工作台（上传 `assets/demo/sample.mp4` 跑完后） | 事件时间线（事件热力 + 实体生命线） |
+| --- | --- |
+| ![Web 工作区](docs/screenshots/web-workspace.png) | ![事件时间线](docs/screenshots/event-timeline.png) |
+
+![场景知识图谱](docs/screenshots/kg-graph.png)
+
+- 前两张是真实运行截图：`python -m uvicorn web.backend.main:app --port 8000` 起服务，上传仓库自带的合成示例视频，等进度到 100% 后截的。左边是标注视频 + 实体档案，右边可切「事件 / KG / 日志」页签；下方是事件热力条与每个实体的生命线（虚线缺口＝该帧没检到）。
+- 第三张是**同一段示例视频**走 CLI 全链路（`--dry-run --event-interval 30`）后导出的 GraphML，再用 `python scripts/visualize_kg.py --kg <graphml> --output kg.png` 渲染：6 个 Event + 4 个 Entity、19 条边（`belongs_to` / `interacts_with` / `next`），和下面「这段示例视频跑出来的实际数字」是同一组结果，未做手工修饰。
+- 素材本身是**合成画面**（几何人形，无人像），所以截图里看起来像简笔画——那是素材，不是渲染问题。
 
 ## 它解决什么问题
 
@@ -46,35 +67,30 @@ tracklet 会断，Entity 不该断。按 0.35 位置 + 0.30 时间 + 0.35 外观
 
 | Agent | 职责 | 关键取舍 |
 | --- | --- | --- |
-| `trajectory_agent` | 个体运动模式 | 纯规则：速度先除以人体框高度做尺度归一化，再按场景分位数分 stationary/slow/normal/fast/running。类里的 `_llm_refine()` 定义了但没有任何调用点 |
+| `trajectory_agent` | 个体运动模式 | 纯规则：速度先除以人体框高度做尺度归一化，再按场景分位数分 stationary/slow/normal/fast/running，不调模型 |
 | `interaction_agent` | 两两交互 | 轨迹按跳变点切段后做时间对齐，提取距离均值/方差、轨迹余弦、共现时长，分成结伴同行 / 面对面交谈 / 短暂接触 / 无交互；几何规则置信度 < 0.60 时才调一次 LLM 精判 |
 | `summary_agent` | 场景总述 | 只吃前两者的结构化 findings，不重新看原始轨迹；输出是字符串模板拼接，不调模型 |
 | `anomaly_agent` | 异常行为 | 拿 Behavior 模板的关键词集合与轨迹/交互特征打分，只输出 `raw_score`，最终严重度留给协调层融合；不调模型 |
 
 **Agent 层的 LLM 实际参与度**（别按「四个 Agent 都在调模型」理解）：
 
-- 主流程里唯一会触发 LLM 的是 `interaction_agent`：规则算出的置信度 `< 0.60` 时调一次 `chat_with_json_output` 精判交互类型（`interaction_agent.py:221`），且只有 LLM 置信度更高时才覆盖规则结论。
-- `trajectory_agent` 是纯规则/分位数；`_llm_refine()` 定义了但**零调用**，早前 README 里「规则先出结论，LLM 只补边界帧」对应的就是这个死函数。
-- `summary_agent` 是纯字符串模板，`anomaly_agent` 是关键词集合打分，两者都不调模型。
-- `agents/prompts/*.md` 这 5 个文件只在构造 Agent 时被 `_load_prompt()` 读进 `self.system_prompt`，除死代码外没有任何调用把它们送进模型——**prompt 文件未接入**。
+- 主流程里唯一会触发 LLM 的是 `interaction_agent`：规则算出的置信度 `< 0.60` 时调一次 `chat_with_json_output` 精判交互类型，且只有 LLM 置信度更高时才覆盖规则结论。这次调用的 system prompt 来自 `agents/prompts/interaction.md`，是全仓唯一真正送进模型的 prompt 文件。
+- `trajectory_agent` 是纯规则/分位数；`summary_agent` 是纯字符串模板；`anomaly_agent` 是关键词集合打分。这三个都不调模型，因此也没有 system prompt。
+- 早前 `trajectory_agent._llm_refine()`、`agents/prompts/` 下另外四个 md、以及 `vlm_client.py` / `doubao_vlm_client.py` 都属于「写了但没接线」的死代码，已删除。
 - 另一处活跃的 LLM 入口是 `/chat` 的兜底：规则模板匹配不上时才把实体摘要发给 LLM；前端确认合并发的 `__merge__` 指令不调模型。
 
 ### 7. 知识图谱 `kg/`
 
 - `graph_store.py`：NetworkX DiGraph。属性统一 JSON 编解码，支持 upsert、子图、VF2 子图匹配、GraphML 存取；Event 节点带 `expires_at`，可按时间批量淘汰。
 - `continuity.py`：写 Event / Entity 节点和 `belongs_to`、`interacts_with`、`next` 边。同一对实体的交互边按事件聚合，保留最近 20 条证据，`confidence = min(1, 事件数 / 5)`，`duration` 由证据累加。
-- `rule_engine.py` + `kg_builder.py`：规则引擎按 `zone_type`、速度区间、停留时长、方向变化逐实体检查；`kg_builder` 让 LLM 产出行为模板与 Scene 节点。
-  **`rule_engine` 已接入管线**：`pipeline.py --with-rules` 会在 Agent 写完之后调用 `RuleEngine.check_all()`，
+- `rule_engine.py`：按 `zone_type`、速度区间、停留时长、方向变化逐实体检查。
+  **已接入管线**：`pipeline.py --with-rules` 会在 Agent 写完之后调用 `RuleEngine.check_all()`，
   命中结果挂在 `output["rule_hits"]` 上并打印。内置 3 条规则（`kg/rule_engine.py::default_rules()`）：
   徘徊超 60 秒、奔跑、静止超 120 秒。这些规则依赖 Entity 节点的 `motion_profile` / `velocity` /
   `direction_change_count` / `first_seen` / `class` 字段，`trajectory_agent` 现在会把它们写进去
   ——之前没写，所以引擎即使被调用也一条都匹配不上。
-  `kg_builder`（LLM 生成行为模板）仍未接主流程，需要时手动调用。
-  没接进主流程的原因不是「没排上」，而是**接上也是空转**：`RuleEngine.check_entity` 读
-  `motion_profile` / `velocity` / `first_seen` / `class` 这些 Entity 字段，而 `continuity.py`
-  写的 Entity 只有 `first_seen_frame` / `last_seen_frame` / `tracking_quality` 等；
-  `KGBuilder` 默认生成的规则 `zone_type` 是 `"*"`，Event 的 `zone_type` 实际是 `"full_frame"`。
-  两侧字段没对齐，所以它只能算一个可用的骨架，不能被当成现有能力读。
+  （早前的 `kg_builder.py`（LLM 生成 Behavior 模板）从未接线、字段也对不上，已删除；
+  `anomaly_agent` 用的是内置模板表 `BEHAVIOR_TEMPLATES`。）
 
 ## 前置要求
 
@@ -87,10 +103,13 @@ tracklet 会断，Entity 不该断。按 0.35 位置 + 0.30 时间 + 0.35 外观
 |---|---|---|
 | `yolov8n-pose.pt`（检测 + 姿态） | 首次运行时 Ultralytics 自动下载 | 跑不起来（必需） |
 | `yolov8l.pt`（Web 端检测，约 87 MB） | Web 后端硬编码用它（`web/backend/pipeline_runner.py`），不在仓库里 | 不起 Web 演示；CLI 不用它 |
-| `osnet_x0_25_msmt17.pt`（ReID 特征，512 维） | 手动放到 `models/`，或交给 BoxMOT 管理 | 回退 ImageNet ResNet18：ID 连续性明显变差，交叉遮挡后更容易换 ID。日志会打印 `[ReID] BoxMOT 不可用（…），回退 ResNet18`，看到这行就说明正在用回退链路 |
+| `osnet_x0_25_msmt17.pt`（ReID 特征，512 维） | 手动放到 `models/`；**默认路径会优先读它**（`ReIDExtractor` 检测到文件就走 torchreid 本地链路），没有时才交给 BoxMOT 自动管理 | 回退 BoxMOT → 再回退 ImageNet ResNet18：ID 连续性明显变差，交叉遮挡后更容易换 ID。日志会打印 `[ReID] BoxMOT 不可用（…），回退 ResNet18` 或 `[ReID] 自实现 OSNet 不可用（…）`，看到这两行就说明正在用回退链路 |
 
 OSNet 权重不随仓库分发：它按 MSMT17 训练，而 MSMT17 的图像有使用限制，权重再分发同样受限；
-文件本身也不小。要精确的 ID 连续性就把权重放进 `models/`，只是看看效果则回退版也能跑完。
+文件本身也不小。要精确的 ID 连续性就把权重放进 `models/`（放进去即生效，不需要改配置或传
+`backbone=osnet_fast`——早前那条「只在 `osnet_fast` 分支读 `models/`」的路径没有任何入口能走到，
+现在默认路径会自己切过去），只是看看效果则回退版也能跑完。BoxMOT 那条路会去 Google Drive 拉权重，
+网络不通时通常表现为长时间卡住后回退 ResNet18。
 
 **API Key**：Agent 层是在线 LLM（DeepSeek），需 `set DEEPSEEK_API_KEY=sk-...`。实际只有交互分析
 Agent 在规则置信度 `< 0.60` 时调一次（见第 6 节的 LLM 参与度），其余三个 Agent 是规则/模板。
@@ -111,7 +130,7 @@ pip install -r requirements.txt
 ```
 
 **权重**：`yolov8n-pose.pt` 开箱自动下载；想要稳定的 OSNet 特征，把 `osnet_x0_25_msmt17.pt`
-放进 `models/`（见「前置要求」的表）。
+放进 `models/` 即可（默认 ReID 路径优先读这个文件，见「前置要求」的表）。
 
 **示例视频（不需要自备素材）**：`assets/demo/sample.mp4` 是仓库自带的**合成监控素材**（1280×720 / 25fps / 8s / 1.3 MB），4 个几何绘制的行人，包含交叉遮挡、一人在画面中部低速徘徊、一人走出画面再回来。**不是真实监控画面，也不含任何人像。**
 
@@ -275,7 +294,16 @@ python -m evaluation.make_demo_sequence --report
 python -m pytest -q
 ```
 
-实测 **131 passed**（Python 3.13 + pytest，本机完整依赖）。`tests/` 共 16 个文件，覆盖 tracker 配置与检测类别透传、姿态关键点按 `track_id` 对齐、Entity 合并判定、事件序列化、KG 连续性写入、gate 指标、标准 MOT 指标适配器（满分自检 + 合成序列的判别力比对）、`/chat` 背后的问答规则，以及 Web 前端契约。`TestDemoSequence` 用 `evaluation/demo_data/` 的三组预测守住 IDF1 / IDSW / FN 的方向，改坏 `mot_metrics.py` 的匹配或计数会直接红。
+实测 **160 passed**（Python 3.13 + pytest，本机完整依赖）。`tests/` 共 21 个文件，覆盖 tracker 配置与检测类别透传、ReID 权重来源选择、姿态关键点按 `track_id` 对齐、Entity 合并判定、事件序列化与事件编号重置、KG 连续性写入、gate 指标、标准 MOT 指标适配器（满分自检 + 合成序列的判别力比对）、`/chat` 背后的问答规则、Web 前端契约，以及本轮补上的四块：`Orchestrator` 路由与上下文传递、`SummaryAgent`、`AnomalyAgent`、Web 接口（`/`、`/upload`、`/chat`、WebSocket 错误分支）、端到端管线（合成视频 + 假检测/假跟踪 → 事件 → 三个 Agent → KG → GraphML）。
+
+`TestDemoSequence` 用 `evaluation/demo_data/` 的三组预测守住 IDF1 / IDSW / FN 的方向，改坏 `mot_metrics.py` 的匹配或计数会直接红。端到端测试不依赖 CUDA、YOLO 权重和网络，CI 里也能跑。
+
+**CI**：`.github/workflows/ci.yml` 跑两件事——`ruff check --select F,E9 .`（未使用 import / 未使用变量 / 语法错误）和 `python -m pytest -q`（Python 3.10 与 3.12 各一遍，torch 用 CPU 轮子）。本地复现同一条检查：
+
+```bash
+python -m ruff check --select F,E9 .
+python -m pytest -q
+```
 
 ## 技术栈
 
@@ -329,4 +357,10 @@ Entity 合并层层放大。当前实现把「ID 稳定」限定在**单镜头�
 
 ## 许可
 
-MIT，见 [LICENSE](LICENSE)。
+本项目**自身代码**：MIT，见 [LICENSE](LICENSE)。
+
+依赖 **`ultralytics`（YOLOv8）与 `boxmot` 是 AGPL-3.0**。因此将本项目与这些依赖**组合分发**
+（打包镜像、发安装包、交付设备），或**作为网络服务提供**时，整体受 **AGPL-3.0** 约束：
+需按 AGPL 提供整体源码，网络服务用户有权获取对应源码。**如需闭源商用**，需替换检测 / ReID
+实现（或改用非 AGPL 的模型与推理栈），或向 Ultralytics 与 boxmot 作者取得商业授权。
+逐项依赖、许可证与替代方案见 [THIRD-PARTY.md](THIRD-PARTY.md)。

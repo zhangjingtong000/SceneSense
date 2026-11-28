@@ -7,7 +7,7 @@ from pathlib import Path
 
 import networkx as nx
 from fastapi import FastAPI, File, UploadFile, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
 from agents.env import get_local_env

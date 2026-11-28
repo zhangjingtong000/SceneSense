@@ -3,7 +3,6 @@
 import asyncio
 import base64
 import contextlib
-import json
 import os
 import time
 from pathlib import Path
@@ -474,6 +473,8 @@ async def run_pipeline(video_path: str, video_id: str, websocket, api_key: str =
         orch.register_agent(SummaryAgent(llm))
 
     tracker = create_web_tracker(device)
+    # 事件编号是类变量，同一进程里第二次上传不重置就会从上一个视频的编号往后数
+    EventBuilder.reset_ids()
     event_builder = EventBuilder(event_interval_frames=60)
     entity_profiles = EntityProfileManager()
     # 位置门限按画面宽度比例（跨遮挡合并需要，140px 默认值在大画面下过严）
@@ -486,7 +487,6 @@ async def run_pipeline(video_path: str, video_id: str, websocket, api_key: str =
     event_start = 0
     tracker_results: list[dict] = []
     all_events: list[dict] = []
-    last_keypoints: list[list[list[float]]] = []
     annotated_images: list[str] = []
     display_track_memory: dict[int, dict] = {}
     candidate_tracker = CandidateDisplayTracker(min_hits=3, max_age=5, iou_threshold=0.35)

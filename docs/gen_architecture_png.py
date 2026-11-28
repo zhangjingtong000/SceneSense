@@ -104,7 +104,7 @@ def main() -> None:
                     ha="left", va="center")
 
     # Agent 层 ←→ KG 层 读写旁路
-    agent_y, agent_h = rows[4][4], rows[4][5]
+    agent_y = rows[4][4]
     kg_y, kg_h = rows[5][4], rows[5][5]
     ax.add_patch(FancyArrowPatch((9.55, agent_y + 0.05), (9.55, kg_y + kg_h - 0.05),
                                  arrowstyle="<|-|>", mutation_scale=18,

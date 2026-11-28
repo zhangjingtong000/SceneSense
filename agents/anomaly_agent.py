@@ -88,8 +88,8 @@ class AnomalyAgent(BaseAgent):
     ]
 
     def __init__(self, llm_client: LLMClient) -> None:
-        prompt = self._load_prompt("anomaly")
-        super().__init__("anomaly_agent", llm_client, prompt)
+        # 关键词模板打分，不调模型：没有 system prompt（原 prompts/anomaly.md 已删）
+        super().__init__("anomaly_agent", llm_client, "")
 
     def think(self) -> dict:
         """检测异常行为。
@@ -106,23 +106,9 @@ class AnomalyAgent(BaseAgent):
                 "findings": list[dict]
             }
         """
-        previous_findings = self.context.get("previous_findings", [])
         tracklets = self.context.get("tracklets", [])
-        spatial_relations = self.context.get("spatial_relations", [])
 
-        # 分离轨迹和交互的 findings
-        trajectory_findings = [
-            f
-            for f in previous_findings
-            if f.get("source") == "trajectory_agent"
-            or any(
-                pf.get("finding_type") == "motion_pattern"
-                for pf in (
-                    [f] if isinstance(f, dict) else []
-                )
-            )
-        ]
-        # 修正：直接从 context 的 key 判断
+        # 轨迹/交互的 findings 直接从结构化响应里取（previous_findings 只是摘要）
         all_responses = self.context.get("all_agent_responses", {})
         traj_response = all_responses.get("trajectory_agent", {})
         inter_response = all_responses.get("interaction_agent", {})
@@ -359,7 +345,6 @@ class AnomalyAgent(BaseAgent):
         motion = entity_data.get("motion") or {}
         interactions = entity_data.get("interactions", [])
         velocity = entity_data.get("velocity_ms", 0)
-        pattern_type = template["pattern_type"]
         keywords = template["keywords"]
 
         # 轨迹/交互 Agent 的 finding.value 可能是结构化 dict（如 {"label": "徘徊"}）
