@@ -391,4 +391,70 @@ best_z = (best_score - 候选分数均值) / 候选分数标准差
 原因是候选分数的区分度本就很高，z 值普遍超过门槛，该条件几乎不改变决策——
 与 margin 门限的结论一致：当前瓶颈不在“分数不够区分”，而在 track 断开后重建。
 
+## 标准 MOT 指标适配器（IDF1 / MOTA / HOTA）
+
+`evaluation/mot_metrics.py` 按 MOTChallenge 口径计算 IDF1 / MOTA / IDP / IDR / FP / FN / IDSW
+（py-motmetrics）与 HOTA / DetA / AssA（TrackEval）。输入 GT 为
+`frame,id,x,y,w,h,mark,class,visibility`（1 基帧号），预测为
+`frame,id,x,y,w,h,conf`（0 基帧号）或 `scripts/export_predictions.py` 导出的 JSONL；
+默认 `--gt-frame-offset -1` 把 MOT17 的 1 基 GT 对齐到 0 基预测。两个后端各自可选：
+`pip install motmetrics` 给 IDF1 / MOTA，`pip install --no-deps trackeval` 给 HOTA；
+缺哪个对应字段就是 `None`，另一个照常算。
+
+### 真实序列实测（MOT17 train，7 个序列，298 帧截断）
+
+这批数字的口径必须先说清：预测来自仓库外的一次批处理
+（`yolov8l.engine` / `imgsz=1920` / `conf=0.15` / `reid_interval=3`，产物为
+`MOT17-*-FRCNN.base.jsonl`，`.meta.json` 记 `frames=300`），**每个序列只跑到 frame 299（前 298 帧）**；
+MOT17-02 / 04 / 05 的 GT 分别有 600 / 1050 / 837 帧，七个序列的帧覆盖率 28%–57%。
+预测框 28,129 个，GT 框 112,297 个，预测是 GT 的 25.0%。这不是
+`scripts/run_mot_sequences.py` 的产物，也不是官方 MOTChallenge 提交成绩。
+
+| 序列 | 帧数 | GT 框 | IDF1 | MOTA | HOTA | IDP | IDR | FP | FN | IDSW |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| MOT17-02 | 600 | 18581 | 0.2626 | 0.1271 | 0.2125 | 0.769 | 0.158 | 725 | 15482 | 12 |
+| MOT17-04 | 1050 | 47557 | 0.2775 | 0.1491 | 0.2085 | 0.824 | 0.167 | 1261 | 39189 | 15 |
+| MOT17-05 | 837 | 6917 | 0.1269 | **-0.0387** | 0.1601 | 0.370 | 0.077 | 841 | 6324 | 20 |
+| MOT17-09 | 525 | 5325 | 0.3933 | 0.2368 | 0.2972 | 0.567 | 0.301 | 774 | 3268 | 22 |
+| MOT17-10 | 654 | 12839 | 0.2688 | 0.0822 | 0.2171 | 0.515 | 0.182 | 1716 | 10015 | 53 |
+| MOT17-11 | 900 | 9436 | 0.3131 | 0.1417 | 0.2771 | 0.685 | 0.203 | 728 | 7368 | 3 |
+| MOT17-13 | 750 | 11642 | 0.2139 | 0.0429 | 0.2048 | 0.512 | 0.135 | 1279 | 9846 | 18 |
+| 按 GT 框加权 | 5316 | 112297 | 0.2667 | 0.1188 | 0.2168 | 0.695 | 0.168 | 7324 | 91492 | 143 |
+
+读法：
+
+- 召回低的主因是序列被截断：GT 里大半框所在帧根本没有预测，IDR 的上限先被覆盖率封顶；IDP 0.70 说明已经预测出来的框精度尚可。MOT17-05 的 MOTA 为负，是 841 个 FP 相对 6917 个 GT 太多（MOTA 本就可为负）。
+- 这组数字只能证明适配器在真实数据上跑通，不能当跟踪器召回或性能结论引用。
+
+要得到可对标的数字，需同时满足：跑完整 `img1/`（`run_mot_sequences.py --max-frames 0`）、用仓库默认导出命令、GT 全量参与、把模型 / imgsz / conf / 帧范围写进 meta。复现需要 GPU 和 MOT17 数据集（预测文件不入库）：
+
+```bash
+python scripts/run_mot_sequences.py --root MOT17/train --pattern "MOT17-*-FRCNN" --limit 7
+python -m evaluation.mot_metrics \
+  --gt MOT17/train/MOT17-04-FRCNN/gt/gt.txt \
+  --pred outputs/mot_sequences/MOT17-04-FRCNN.pred.jsonl
+```
+
+### 合成数据回归（evaluation/demo_data/）
+
+200 帧 / 6 目标 / 1200 个 GT 框的合成序列，clone 即可跑：
+
+```bash
+python -m evaluation.mot_metrics \
+  --gt evaluation/demo_data/gt.txt \
+  --pred evaluation/demo_data/idsw.txt --out outputs/mot/idsw.json
+```
+
+输出 `IDF1=0.825  MOTA=0.9967  HOTA=0.8723  (DetA=1.0  AssA=0.7608)`。三份预测取自同一份 GT，只差跟踪错误：
+
+| 预测文件 | 造了什么错 | IDF1 | MOTA | HOTA | IDSW | FN | FP |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `perfect.txt` | 与 GT 逐框一致 | 1.000 | 1.000 | 1.000 | 0 | 0 | 0 |
+| `idsw.txt` | 2、4 号各换 1 次 ID，6 号换 2 次 | 0.825 | 0.9967 | 0.8723 | 4 | 0 | 0 |
+| `dropout.txt` | 1 号漏 30 帧、5 号漏 50 帧、3 号每 7 帧漏 1 帧 | 0.9524 | 0.9092 | 0.8651 | 0 | 109 | 0 |
+
+这层只证明适配器能把“好”和“坏”分开，`tests/evaluation/test_mot_metrics.py::TestDemoSequence`
+把关系固化成断言；不代表真实跟踪性能。重新生成：`python -m evaluation.make_demo_sequence --report`
+（改了生成器要重跑，测试会逐字节比对）。
+
 

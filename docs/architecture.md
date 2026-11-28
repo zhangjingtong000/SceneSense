@@ -446,3 +446,43 @@ fused_severity = anomaly_agent.raw_score × 0.5
 | 5 | 协调 Agent | 多轮协商的终止条件：CONSENSUS / STALEMATE / MAX_ROUNDS | ⛔ 未实现，且**架构已改为单轮星型编排** —— `Orchestrator.process_event` 按注册顺序让每个 Agent 各跑一次，收集结果后交总结层，没有「轮次」概念。多轮协商需要 Agent 之间互相看结果并重新提问，那是另一套架构；当前设计选择单轮，代价是复杂冲突不会二次求证 |
 
 > 第 5 项不是「忘了做」，是设计变了：单轮星型编排在事件级吞吐上更稳（每个事件固定 N 次 Agent 调用，可预测），代价是遇到互相矛盾的判断时不会追问。如果要支持多轮，需要在 `Orchestrator` 里加轮次控制与终止判定，并让 Agent 的 `think()` 能接收其它 Agent 的结论。
+
+## 7. 实现要点与推导
+
+> 主页只保留结论，这一节记录配置常量、阈值来源与取舍推导，和源码一一对应。
+
+### 7.1 跟踪：GMC、卡尔曼、ReID 与组合距离
+
+- **GMC**：相邻帧用 `goodFeaturesToTrack` 取稀疏角点，`calcOpticalFlowPyrLK` 跟踪，RANSAC 拟合 2×3 仿射，把背景整体位移从卡尔曼预测里扣掉。手持、云台或轻微抖动的画面里，没有这一步，静止行人会被算成高速移动。
+- **卡尔曼**：8 状态 `(cx, cy, w, h, vx, vy, vw, vh)`，4 维观测（中心点 + 宽高）；轨迹丢失后靠预测位置维持，`lost_track_buffer=120` 帧后才丢弃。
+- **ReID**：OSNet x0.25（MSMT17 预训练）输出 512 维 L2 归一化特征。BoxMOT 与 torchreid 两条链路，本地 `models/osnet_x0_25_msmt17.pt` 优先；都不可用时回退 ImageNet ResNet18，ID 连续性明显变差。
+- **组合距离**：先算 `1 - IoU`；IoU < 0.5 的配对不看外观，外观余弦距离 > 0.25 直接置 1；两者取 `min` 作为匈牙利代价。外观只在「位置还说得过去」的候选内部做区分，不全局找人，避免同款工服、相似身高的人串号。
+- **低分框阶段**：遮挡后重现的人往往只剩低分检测，第二阶段只用 IoU（阈值 0.5）。此处加入外观会引入错误关联，恢复率反而下降。
+
+### 7.2 实体合并：三项证据
+
+- 打分：0.35 × 位置 + 0.30 × 时间 + 0.35 × 外观；≥0.72 自动合并，0.30–0.72 记为 tentative 候选并逐帧累积证据。
+- 位置分取「最后位置」和「按速度外推位置」中更近的那个；`pipeline.py` 启动时把位置门限抬到画面宽的 40%，否则 1920 画面里跨几秒遮挡的位移会被判成新实体。
+- 时间分允许 300 帧 gap；外观余弦 > 0.90 时可突破上限，用于立柱、货架后的长时间遮挡。
+- 合并证据写进实体档案（`merge_evidence`），供 Web 与 KG 回溯。
+
+### 7.3 事件窗口
+
+- CLI 每 30 帧（`--event-interval`）切一个 `SpatioTemporalEvent`；Web 后台固定 60 帧，为交互流畅让路。
+- 窗口内 tracklet 按 `track_id` 去重，保留轨迹最全的一条；计算 100 像素内的 `near` 空间关系。
+- 事件既是 Agent 的输入粒度，也是 KG 的 Event 节点来源；后 20 帧凑不满一个窗口时不会补一个短事件。
+
+### 7.4 编排与 LLM 参与度
+
+- 单轮星型编排：中心按 `trajectory → interaction → summary` 串行路由，每步把前序 findings 塞进下一步上下文；结束后统一收集 `kg_operations` 写 GraphStore。
+- 选星型而非链式：链式 A→B→C 里 C 只看得到 B，想加维度就得改链路；星型中心持有全部 responses，Agent 只依赖传入 context，可单独替换或追加（`--with-anomaly` 就是这样插到 `summary` 之前的）。
+- 四个 Agent 中只有 `interaction_agent` 会调 LLM：规则置信度 < 0.60 时调一次 `chat_with_json_output`，且只在 LLM 置信度更高时覆盖规则结论；prompt 来自 `agents/prompts/interaction.md`。
+- `trajectory_agent` 是纯规则 / 分位数，`summary_agent` 是字符串模板，`anomaly_agent` 是关键词模板打分，都不调模型。
+- `/chat` 的规则模板匹配不上时，才把实体摘要发给 LLM；前端「待确认合并」发的 `__merge__` 只在前端状态完成，不落库。
+
+### 7.5 知识图谱与规则引擎
+
+- `kg/graph_store.py`：NetworkX DiGraph，属性统一 JSON 编解码，支持 upsert、子图、VF2 子图匹配、GraphML 存取；Event 节点带 `expires_at`，可按时间批量淘汰。
+- `kg/continuity.py`：写 Event / Entity 与 `belongs_to`、`interacts_with`、`next` 边；同一对实体的交互边按事件聚合，保留最近 20 条证据，`confidence = min(1, 事件数 / 5)`，`duration` 由证据累加。
+- `kg/rule_engine.py`：按 `zone_type`、`motion_profile`、速度区间、停留时长、方向变化逐实体检查；内置徘徊 > 60 秒、奔跑、静止 > 120 秒三条规则，依赖 Entity 的 `motion_profile` / `velocity` / `direction_change_count` / `first_seen` / `class` 字段。
+- `pipeline.py --with-rules` 在 Agent 写完后调用 `RuleEngine.check_all()`，命中结果挂在 `output["rule_hits"]` 并打印。
