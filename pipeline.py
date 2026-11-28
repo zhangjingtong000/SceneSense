@@ -10,8 +10,10 @@ import argparse
 import json
 import os
 import signal
+import sys
 import time
 from datetime import datetime
+from pathlib import Path
 
 import cv2
 import numpy as np
@@ -60,6 +62,31 @@ def resolve_runtime_fps(resolved_fps: float | None, video_fps: float) -> float:
     if video_fps > 0:
         return video_fps
     return 30.0
+
+
+def open_video_writer(path: str, fps: float, size: tuple[int, int]) -> cv2.VideoWriter:
+    """创建标注视频写入器，先建父目录，再校验是否真的能写。
+
+    ``cv2.VideoWriter`` 在目标目录不存在时不会抛异常，只让 ``isOpened()`` 返回
+    False，之后每次 ``write()`` 都静默丢弃 —— 表现出来就是"提示已保存、文件不
+    存在"。所以这里显式 ``mkdir -p``，并用 ``RuntimeError`` 把打不开的情况交给
+    调用方，由调用方明确报错并跳过"已保存"提示。
+
+    Args:
+        path: 输出视频路径
+        fps: 帧率
+        size: (宽, 高)
+
+    Returns:
+        已经打开的 cv2.VideoWriter
+    """
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
+    writer = cv2.VideoWriter(path, cv2.VideoWriter_fourcc(*"mp4v"), fps, size)
+    if not writer.isOpened():
+        raise RuntimeError(
+            f"cv2.VideoWriter 无法打开 {path}（fourcc=mp4v, size={size}, fps={fps:g}）"
+        )
+    return writer
 
 
 def draw_annotations(frame: np.ndarray, tracked: list[dict]) -> np.ndarray:
@@ -144,6 +171,7 @@ class Pipeline:
         self.with_anomaly = with_anomaly
         self.with_rules = with_rules
         self._writer = None  # cv2.VideoWriter, 延迟初始化
+        self._annotated_frames = 0  # 实际写进视频的帧数
         # 姿态每 5 帧算一次，中间帧按 track_id 复用（不能用列表下标：
         # tracked 的顺序会因 lost / 新增轨迹变化，下标回填会画到别人身上）。
         self._keypoints_by_track_id: dict = {}
@@ -311,9 +339,16 @@ class Pipeline:
                 annotated = draw_annotations(frame.copy(), tracked if tracked else [])
                 if self._writer is None:
                     h, w = annotated.shape[:2]
-                    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-                    self._writer = cv2.VideoWriter(self.annotate_path, fourcc, fps, (w, h))
-                self._writer.write(annotated)
+                    try:
+                        self._writer = open_video_writer(self.annotate_path, fps, (w, h))
+                    except (RuntimeError, OSError) as exc:
+                        # 只有这里打不开才报错并关掉标注；_on_shutdown 不会再谎报"已保存"
+                        print(f"错误：{exc}", file=sys.stderr)
+                        print("标注视频输出失败，已关闭 --annotate，其余流程照常。", file=sys.stderr)
+                        self.annotate = False
+                if self._writer is not None:
+                    self._writer.write(annotated)
+                    self._annotated_frames += 1
 
             self.frame_idx += 1
 
@@ -439,10 +474,15 @@ class Pipeline:
         print(f"\n{'='*60}")
         print(f"Shutting down. Processed {len(self._results)} events.")
 
-        # 释放 VideoWriter
+        # 释放 VideoWriter：只有真的打开并写进去过帧，才算保存成功
         if self._writer is not None:
             self._writer.release()
-            print(f"Annotated video saved to {self.annotate_path}")
+            if self._annotated_frames:
+                print(f"Annotated video saved to {self.annotate_path} "
+                      f"({self._annotated_frames} frames)")
+            else:
+                print(f"警告：{self.annotate_path} 没有任何帧写入，未生成标注视频",
+                      file=sys.stderr)
 
         # 持久化 KG
         if self.kg_storage_path:

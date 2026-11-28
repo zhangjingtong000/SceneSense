@@ -167,3 +167,65 @@ def test_anomaly_agent_is_inserted_before_summary_in_full_chain(
     ]
     output = pipes._results[0]["output"]
     assert "anomaly_agent_confidence" in output["agent_summary"]
+
+
+def test_annotate_creates_missing_output_directory(video_path, tmp_path, fake_perception, capsys):
+    """README 的 --annotate-path outputs/demo.mp4：全新 clone 时 outputs/ 不存在。
+
+    cv2.VideoWriter 不会自己建目录，缺目录时 isOpened() 返回 False、write() 全丢。
+    这里锁两件事：目录必须被自动创建；只有真的写进去过帧才打印"已保存"。
+    """
+    out = tmp_path / "outputs" / "nested" / "demo.mp4"
+    assert not out.parent.exists()
+
+    pipes = make_pipeline(
+        video_path, tmp_path, dry_run=True, annotate=True, annotate_path=str(out)
+    )
+    pipes.run()
+
+    assert out.parent.is_dir()
+    assert out.is_file() and out.stat().st_size > 0
+    assert pipes._annotated_frames == 40
+    captured = capsys.readouterr()
+    assert f"Annotated video saved to {out} (40 frames)" in captured.out
+    assert captured.err == ""
+
+
+class BrokenVideoWriter:
+    """模拟目录不可写等导致 cv2.VideoWriter 打不开的情况。"""
+
+    def __init__(self, *args, **kwargs):
+        self.released = False
+
+    def isOpened(self):  # noqa: N802 - 与 OpenCV API 同名
+        return False
+
+    def write(self, frame):
+        raise AssertionError("打不开的 writer 不应该收到帧")
+
+    def release(self):
+        self.released = True
+
+
+def test_annotate_writer_failure_is_reported_without_claiming_saved(
+    video_path, tmp_path, fake_perception, monkeypatch, capsys
+):
+    """writer.isOpened() == False 时必须明确报错，且绝不能打印"已保存"。"""
+    monkeypatch.setattr(pipeline_module.cv2, "VideoWriter", BrokenVideoWriter)
+    out = tmp_path / "outputs" / "demo.mp4"
+
+    pipes = make_pipeline(
+        video_path, tmp_path, dry_run=True, annotate=True, annotate_path=str(out)
+    )
+    pipes.run()
+
+    captured = capsys.readouterr()
+    assert "Annotated video saved" not in captured.out
+    assert "Annotated video saved" not in captured.err
+    assert "无法打开" in captured.err
+    assert str(out) in captured.err
+    assert pipes._writer is None
+    assert pipes._annotated_frames == 0
+    assert pipes.annotate is False
+    assert not out.exists()  # 目录建了，但没有视频文件
+    assert "错误" in captured.err
