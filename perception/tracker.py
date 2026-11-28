@@ -286,7 +286,8 @@ class Track:
 
     _id_counter = 0
 
-    def __init__(self, bbox_xyxy, score, feature, frame_idx, timestamp):
+    def __init__(self, bbox_xyxy, score, feature, frame_idx, timestamp,
+                 class_name: str = 'person'):
         Track._id_counter += 1
         self.track_id = Track._id_counter
         self.state = 'tentative'  # tentative → confirmed → lost → removed
@@ -342,7 +343,9 @@ class Track:
         self._bbox_xyxy = list(bbox_xyxy)
         self._velocity_ms = 0.0
         self._direction_deg = 0.0
-        self._class_name = 'person'
+        # 检测类别跟随最近一次匹配到的检测框；之前写死 'person'，
+        # 导致 --classes 0,2 时车也被标成 person。
+        self._class_name = class_name or 'person'
         self._pose_keypoints: list = []
 
     @staticmethod
@@ -370,8 +373,13 @@ class Track:
         self._age += 1
         self.time_since_update += 1
 
-    def update(self, bbox_xyxy, score, feature, frame_idx, timestamp):
-        """Kalman update with new measurement."""
+    def update(self, bbox_xyxy, score, feature, frame_idx, timestamp,
+               class_name: str | None = None):
+        """Kalman update with new measurement.
+
+        class_name 传当前匹配到的检测类别；None 表示沿用轨迹已有类别
+        （低分框阶段本身就是同一目标，类别一般不变）。
+        """
         x, y, x2, y2 = bbox_xyxy
         w, h = max(1, x2 - x), max(1, y2 - y)
         cx, cy = x + w / 2, y + h / 2
@@ -381,6 +389,8 @@ class Track:
         self.mean = self.kf.x.copy()
         self.cov = self.kf.P.copy()
         self.update_features(feature)
+        if class_name:
+            self._class_name = class_name
         self.score = score
         self.last_seen = frame_idx
         self.time_since_update = 0
@@ -644,7 +654,8 @@ class MultiObjectTracker:
                 det_i = high_idx[di]
                 track.update(bboxes_xyxy[det_i], scores[det_i],
                              features[det_i] if refresh_reid else None,
-                             frame_idx, timestamp)
+                             frame_idx, timestamp,
+                             class_name=class_names[det_i])
                 track.state = 'confirmed'
                 assigned_dets.add(det_i)
                 if track in self.lost_tracks:
@@ -674,7 +685,8 @@ class MultiObjectTracker:
                 track = stage2_tracks[ti]
                 track.update(bboxes_xyxy[det_i], scores[det_i],
                              features[det_i] if refresh_reid else None,
-                             frame_idx, timestamp)
+                             frame_idx, timestamp,
+                             class_name=class_names[det_i])
                 assigned_dets.add(det_i)
                 # 被低分框救回的 lost 轨迹要重新回到活跃集合
                 if track in self.lost_tracks:
@@ -708,7 +720,8 @@ class MultiObjectTracker:
                 det_i = unassigned_high[di]
                 unconfirmed[ti].update(bboxes_xyxy[det_i], scores[det_i],
                                        features[det_i] if refresh_reid else None,
-                                       frame_idx, timestamp)
+                                       frame_idx, timestamp,
+                                       class_name=class_names[det_i])
                 assigned_dets.add(det_i)
             for ti in u_unconf:
                 t = unconfirmed[ti]
@@ -726,14 +739,15 @@ class MultiObjectTracker:
             if scores[det_i] >= self.new_track_thresh:
                 track = Track(bboxes_xyxy[det_i], scores[det_i],
                               features[det_i] if refresh_reid else None,
-                              frame_idx, timestamp)
+                              frame_idx, timestamp,
+                              class_name=class_names[det_i])
                 self.tracked_tracks.append(track)
 
         # ── Step 5: Prune ──
         self._prune()
 
         # ── Build output ──
-        return self._build_output(timestamp, class_names, detections, frame_idx)
+        return self._build_output(timestamp)
 
     def _combined_distance(self, tracks, dets_xyxy, det_scores, det_feats, use_appearance=True):
         """Compute combined IoU + ReID distance matrix."""
@@ -822,8 +836,12 @@ class MultiObjectTracker:
                 self.tracked_tracks.remove(t)
                 self.removed_tracks.append(t)
 
-    def _build_output(self, timestamp, class_names, detections, frame_idx):
-        """Build output list matching the original format. Only confirmed tracks."""
+    def _build_output(self, timestamp):
+        """Build output list matching the original format. Only confirmed tracks.
+
+        类别直接取轨迹上最近一次匹配到的检测类别（`t._class_name`）；
+        早期版本这里虽然收了 `class_names` 参数却零引用，输出永远是 person。
+        """
         results = []
         for t in self.tracked_tracks:
             if not t.is_confirmed():

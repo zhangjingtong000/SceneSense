@@ -64,29 +64,6 @@ graph TD
     style 输出层 fill:#f3e5f5,stroke:#7b1fa2
 ```
 
-### 3.1 KG API 操作定义
-
-```python
-# Agent 通过协调Agent调用的KG接口
-class KGAPI:
-    # 查询
-    def query_nodes(node_type: str, filters: dict) -> list[Node]
-    def query_edges(edge_type: str, filters: dict) -> list[Edge]
-    def get_subgraph(node_ids: list[str], depth: int) -> nx.Graph
-    def match_pattern(pattern_graph: nx.Graph) -> list[dict]  # 子图同构
-
-    # 写入（由协调Agent统一执行）
-    def upsert_node(node_id: str, node_type: str, properties: dict)
-    def upsert_edge(from_id: str, to_id: str, edge_type: str, properties: dict)
-
-    # 生命周期管理（TODO: 实现阶段处理）
-    def evict_before(timestamp: float) -> int  # 清理 expires_at < timestamp 的Event节点
-    def set_ttl(node_id: str, ttl_seconds: float)  # 设置节点过期时间
-```
-
----
-
-
 ## 2. Agent 通信时序图
 
 ```mermaid
@@ -139,7 +116,7 @@ sequenceDiagram
     AA-->>ORC: AgentResponse{agent_confidence, warnings,<br/>findings: [{entity_id, anomaly_type, raw_score, matched_template}]}
     deactivate AA
 
-    Note over ORC: 加权融合: fused = AA.raw×0.5 +<br/>(1-TA.conf)×0.3 + (1-IA.score)×0.2<br/>→ 0.76, CONSENSUS达成
+    Note over ORC: 加权融合: fused = AA.raw×0.5 +<br/>(1-TA.conf)×0.3 + (1-IA.score)×0.2<br/>→ 0.76, CONSENSUS达成<br/>【已废弃：单轮星型编排没有融合与共识判定】
 
     ORC->>KG: upsert(findings, reasoning_path)
     ORC->>ORC: 汇总: Entity-3 徘徊+孤立 → 疑似尾随行为
@@ -147,29 +124,6 @@ sequenceDiagram
 
     Note over EB,KG: === 输出: 行为报告 + 推理路径 ===
 ```
-
-### 3.1 KG API 操作定义
-
-```python
-# Agent 通过协调Agent调用的KG接口
-class KGAPI:
-    # 查询
-    def query_nodes(node_type: str, filters: dict) -> list[Node]
-    def query_edges(edge_type: str, filters: dict) -> list[Edge]
-    def get_subgraph(node_ids: list[str], depth: int) -> nx.Graph
-    def match_pattern(pattern_graph: nx.Graph) -> list[dict]  # 子图同构
-
-    # 写入（由协调Agent统一执行）
-    def upsert_node(node_id: str, node_type: str, properties: dict)
-    def upsert_edge(from_id: str, to_id: str, edge_type: str, properties: dict)
-
-    # 生命周期管理（TODO: 实现阶段处理）
-    def evict_before(timestamp: float) -> int  # 清理 expires_at < timestamp 的Event节点
-    def set_ttl(node_id: str, ttl_seconds: float)  # 设置节点过期时间
-```
-
----
-
 
 ## 3. KG Schema
 
@@ -279,6 +233,7 @@ class KGAPI:
 |------|------|
 | `frame_start` / `frame_end` | 事件覆盖的帧范围，差值 = 窗口帧数 |
 | `fps` | 实际帧率，供 Agent 做时间换算。协调 Agent 据此判断窗口是否足够启动某类分析 |
+| `velocity_ms` / `distance_m` | **单位是像素/秒与像素，不是米**。字段名沿用早期设想的物理单位，没有相机标定时只表示画面位移；dry-run 日志按 `px/s`、`px` 打印 |
 
 ### 4.2 AgentMessage（协调Agent → 分析Agent）
 
@@ -370,34 +325,11 @@ class KGAPI:
 
 | 字段 | 说明 |
 |------|------|
-| `status` | `consensus` / `stalemate` / `max_rounds` — 表示本轮分析的终止原因 |
-| `rounds_used` | 实际使用的 Agent 调用轮数 |
-| `fused_severity` | 协调 Agent 加权融合后的最终严重度，非任何单个 Agent 的输出 |
-| `contributing_agents` | 每个 Agent 对最终分数的贡献及权重，实现可追溯融合 |
-| `uncertain` | status 为 stalemate 时，无法确定的结果放入此列表 |
-
-### 3.1 KG API 操作定义
-
-```python
-# Agent 通过协调Agent调用的KG接口
-class KGAPI:
-    # 查询
-    def query_nodes(node_type: str, filters: dict) -> list[Node]
-    def query_edges(edge_type: str, filters: dict) -> list[Edge]
-    def get_subgraph(node_ids: list[str], depth: int) -> nx.Graph
-    def match_pattern(pattern_graph: nx.Graph) -> list[dict]  # 子图同构
-
-    # 写入（由协调Agent统一执行）
-    def upsert_node(node_id: str, node_type: str, properties: dict)
-    def upsert_edge(from_id: str, to_id: str, edge_type: str, properties: dict)
-
-    # 生命周期管理（TODO: 实现阶段处理）
-    def evict_before(timestamp: float) -> int  # 清理 expires_at < timestamp 的Event节点
-    def set_ttl(node_id: str, ttl_seconds: float)  # 设置节点过期时间
-```
-
----
-
+| `status` | 【已废弃】`consensus` / `stalemate` / `max_rounds` — 早期多轮协商的终止原因，当前单轮编排不产出 |
+| `rounds_used` | 【已废弃】实际使用的 Agent 调用轮数 |
+| `fused_severity` | 【已废弃】协调 Agent 加权融合后的最终严重度，非任何单个 Agent 的输出 |
+| `contributing_agents` | 【已废弃】每个 Agent 对最终分数的贡献及权重，实现可追溯融合 |
+| `uncertain` | 【已废弃】status 为 stalemate 时，无法确定的结果放入此列表 |
 
 ## 5. Agent Prompt 模板设计
 
@@ -462,17 +394,9 @@ class KGAPI:
 
 ### 5.4 协调 Agent
 
-## 6. 实现阶段清单
-
-以下是协议文档里预留、后来逐个落地的情况。**三项里两项已实现**；第三项（多轮协商的终止条件）没有实现，因为最终架构不是多轮协商，而是单轮星型编排——见本节末尾说明。
-
-| # | 位置 | 内容 | 状态 |
-|---|------|------|------|
-| 3 | KG API | `evict_before(timestamp)` — 清理过期 Event 节点，防止 NetworkX 内存图无限增长。Event 节点构建时写入 `expires_at` | ✅ 已实现（`kg/graph_store.py:184`，`pipeline.py:416` 每个事件后调用） |
-| 4 | 异常检测 Agent | 输出 `raw_score`（原始子图匹配分），最终 `fused_severity` 由总结层加权融合 | ✅ 已实现（`agents/anomaly_agent.py`，`raw_score` 与 `confidence` 一并输出） |
-| 5 | 协调 Agent | 多轮协商的终止条件：CONSENSUS / STALEMATE / MAX_ROUNDS | ⛔ 未实现，且**架构已改为单轮星型编排** —— `Orchestrator.process_event` 按注册顺序让每个 Agent 各跑一次，收集结果后交总结层，没有「轮次」概念。多轮协商需要 Agent 之间互相看结果并重新提问，那是另一套架构；当前设计选择单轮，代价是复杂冲突不会二次求证 |
-
-> 第 5 项不是「忘了做」，是设计变了：单轮星型编排在事件级吞吐上更稳（每个事件固定 N 次 Agent 调用，可预测），代价是遇到互相矛盾的判断时不会追问。如果要支持多轮，需要在 `Orchestrator` 里加轮次控制与终止判定，并让 Agent 的 `think()` 能接收其它 Agent 的结论。
+> ⚠️ **本节已废弃**：这是早期「多轮协商」设计的草稿。终止条件 CONSENSUS / STALEMATE / MAX_ROUNDS
+> 与 `fused_severity` 加权融合都**没有实现**——`Orchestrator` 后来改成单轮星型编排（每个事件里每个
+> Agent 各跑一次，见第 6 节）。这段 prompt 也没有被送进模型。
 
 ```
 你是多Agent系统的协调者。基于当前场景和各Agent的输入，做出路由决策和最终融合判断。
@@ -489,13 +413,13 @@ class KGAPI:
 4. 收到 anomaly_agent 结果后，执行加权融合 → FINAL_ANSWER
 5. 如果存在冲突，让相关Agent重新分析（附上不同意见）
 
-终止条件:
+终止条件（【已废弃】未实现）:
 - CONSENSUS: 各Agent的 confidence ≥ 0.7 且 异常Agent raw_score ≤ 0.3(正常) 或 ≥ 0.7(异常)
   满足时直接输出 FINAL_ANSWER
 - STALEMATE: 同一 entity 已路由 2 轮仍无共识 → 标记为 uncertain 并输出，不做第三轮
 - MAX_ROUNDS: 单个事件最多触发 3 轮 Agent 调用（任意组合），防止无限循环
 
-加权融合规则 (Organizer Output):
+加权融合规则（【已废弃】未实现）:
 fused_severity = anomaly_agent.raw_score × 0.5 
                + (1 - trajectory_agent.confidence_that_matches_raw_score) × 0.3
                + (1 - interaction_agent.interaction_score_if_isolated) × 0.2
@@ -504,3 +428,20 @@ fused_severity = anomaly_agent.raw_score × 0.5
 输出 JSON:
 {"next": "agent_name | FINAL_ANSWER", "guidance": "...", "comment": "..."}
 ```
+
+> **Prompt 模板未接入运行时**：`agents/prompts/*.md` 这 5 个文件只在构造 Agent 时被
+> `_load_prompt()` 读进 `self.system_prompt` 字段；真正调用模型的地方
+> （`interaction_agent._llm_classify_pair`）用的是硬编码的 system prompt，
+> 所以本节（以及 5.1–5.3）目前只是设计文档，不是实际输入。
+
+## 6. 实现阶段清单
+
+以下是协议文档里预留、后来逐个落地的情况。**三项里两项已实现**；第三项（多轮协商的终止条件）没有实现，因为最终架构不是多轮协商，而是单轮星型编排——见本节末尾说明。
+
+| # | 位置 | 内容 | 状态 |
+|---|------|------|------|
+| 3 | KG API | `evict_before(timestamp)` — 清理过期 Event 节点，防止 NetworkX 内存图无限增长。Event 节点构建时写入 `expires_at` | ✅ 已实现（`kg/graph_store.py:184`，`pipeline.py:416` 每个事件后调用） |
+| 4 | 异常检测 Agent | 输出 `raw_score`（原始子图匹配分），最终 `fused_severity` 由总结层加权融合 | ✅ 已实现（`agents/anomaly_agent.py`，`raw_score` 与 `confidence` 一并输出） |
+| 5 | 协调 Agent | 多轮协商的终止条件：CONSENSUS / STALEMATE / MAX_ROUNDS | ⛔ 未实现，且**架构已改为单轮星型编排** —— `Orchestrator.process_event` 按注册顺序让每个 Agent 各跑一次，收集结果后交总结层，没有「轮次」概念。多轮协商需要 Agent 之间互相看结果并重新提问，那是另一套架构；当前设计选择单轮，代价是复杂冲突不会二次求证 |
+
+> 第 5 项不是「忘了做」，是设计变了：单轮星型编排在事件级吞吐上更稳（每个事件固定 N 次 Agent 调用，可预测），代价是遇到互相矛盾的判断时不会追问。如果要支持多轮，需要在 `Orchestrator` 里加轮次控制与终止判定，并让 Agent 的 `think()` 能接收其它 Agent 的结论。

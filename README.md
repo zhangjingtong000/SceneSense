@@ -34,7 +34,7 @@ tracklet 会断，Entity 不该断。按 0.35 位置 + 0.30 时间 + 0.35 外观
 
 ### 4. 事件 `perception/event_builder.py`
 
-每 30 帧（`--event-interval`）切一个 `SpatioTemporalEvent`：tracklet 按 `track_id` 去重、保留轨迹最全的一条，计算空间近邻关系后交给 Agent 层。事件既是 Agent 的输入粒度，也是 KG 里 Event 节点的来源。
+每 30 帧（`--event-interval`；Web 后台固定 60 帧，见「Web 演示」）切一个 `SpatioTemporalEvent`：tracklet 按 `track_id` 去重、保留轨迹最全的一条，计算空间近邻关系后交给 Agent 层。事件既是 Agent 的输入粒度，也是 KG 里 Event 节点的来源。
 
 ### 5. 编排 `agents/orchestrator.py`：星型
 
@@ -46,10 +46,18 @@ tracklet 会断，Entity 不该断。按 0.35 位置 + 0.30 时间 + 0.35 外观
 
 | Agent | 职责 | 关键取舍 |
 | --- | --- | --- |
-| `trajectory_agent` | 个体运动模式 | 速度先除以人体框高度做尺度归一化，再按场景分位数分 stationary/slow/normal/fast/running；规则先出结论，LLM 只补规则覆盖不到的边界帧 |
-| `interaction_agent` | 两两交互 | 轨迹按跳变点切段后做时间对齐，提取距离均值/方差、轨迹余弦、共现时长，分成结伴同行 / 面对面交谈 / 短暂接触 / 无交互 |
-| `summary_agent` | 场景总述 | 只吃前两者的结构化 findings，不重新看原始轨迹，避免重复推理 |
-| `anomaly_agent` | 异常行为 | 拿 Behavior 模板的关键词集合与轨迹/交互特征打分，只输出 `raw_score`，最终严重度留给协调层融合 |
+| `trajectory_agent` | 个体运动模式 | 纯规则：速度先除以人体框高度做尺度归一化，再按场景分位数分 stationary/slow/normal/fast/running。类里的 `_llm_refine()` 定义了但没有任何调用点 |
+| `interaction_agent` | 两两交互 | 轨迹按跳变点切段后做时间对齐，提取距离均值/方差、轨迹余弦、共现时长，分成结伴同行 / 面对面交谈 / 短暂接触 / 无交互；几何规则置信度 < 0.60 时才调一次 LLM 精判 |
+| `summary_agent` | 场景总述 | 只吃前两者的结构化 findings，不重新看原始轨迹；输出是字符串模板拼接，不调模型 |
+| `anomaly_agent` | 异常行为 | 拿 Behavior 模板的关键词集合与轨迹/交互特征打分，只输出 `raw_score`，最终严重度留给协调层融合；不调模型 |
+
+**Agent 层的 LLM 实际参与度**（别按「四个 Agent 都在调模型」理解）：
+
+- 主流程里唯一会触发 LLM 的是 `interaction_agent`：规则算出的置信度 `< 0.60` 时调一次 `chat_with_json_output` 精判交互类型（`interaction_agent.py:221`），且只有 LLM 置信度更高时才覆盖规则结论。
+- `trajectory_agent` 是纯规则/分位数；`_llm_refine()` 定义了但**零调用**，早前 README 里「规则先出结论，LLM 只补边界帧」对应的就是这个死函数。
+- `summary_agent` 是纯字符串模板，`anomaly_agent` 是关键词集合打分，两者都不调模型。
+- `agents/prompts/*.md` 这 5 个文件只在构造 Agent 时被 `_load_prompt()` 读进 `self.system_prompt`，除死代码外没有任何调用把它们送进模型——**prompt 文件未接入**。
+- 另一处活跃的 LLM 入口是 `/chat` 的兜底：规则模板匹配不上时才把实体摘要发给 LLM；前端确认合并发的 `__merge__` 指令不调模型。
 
 ### 7. 知识图谱 `kg/`
 
@@ -78,12 +86,15 @@ tracklet 会断，Entity 不该断。按 0.35 位置 + 0.30 时间 + 0.35 外观
 | 权重 | 放哪 / 怎么来 | 缺失的后果 |
 |---|---|---|
 | `yolov8n-pose.pt`（检测 + 姿态） | 首次运行时 Ultralytics 自动下载 | 跑不起来（必需） |
+| `yolov8l.pt`（Web 端检测，约 87 MB） | Web 后端硬编码用它（`web/backend/pipeline_runner.py`），不在仓库里 | 不起 Web 演示；CLI 不用它 |
 | `osnet_x0_25_msmt17.pt`（ReID 特征，512 维） | 手动放到 `models/`，或交给 BoxMOT 管理 | 回退 ImageNet ResNet18：ID 连续性明显变差，交叉遮挡后更容易换 ID。日志会打印 `[ReID] BoxMOT 不可用（…），回退 ResNet18`，看到这行就说明正在用回退链路 |
 
 OSNet 权重不随仓库分发：它按 MSMT17 训练，而 MSMT17 的图像有使用限制，权重再分发同样受限；
 文件本身也不小。要精确的 ID 连续性就把权重放进 `models/`，只是看看效果则回退版也能跑完。
 
-**API Key**：Agent 层是在线 LLM（DeepSeek），需 `set DEEPSEEK_API_KEY=sk-...`。
+**API Key**：Agent 层是在线 LLM（DeepSeek），需 `set DEEPSEEK_API_KEY=sk-...`。实际只有交互分析
+Agent 在规则置信度 `< 0.60` 时调一次（见第 6 节的 LLM 参与度），其余三个 Agent 是规则/模板。
+`/chat` 的兜底也会用到它。
 不需要它时用 `--dry-run`，只跑检测 / 跟踪 / 事件 / KG，不碰网络。
 
 **数据集**：MOT17 不随仓库分发（许可 + 体积：train 集图像以 GB 计）。要跑标准 MOT 指标得自备，
@@ -116,6 +127,8 @@ python pipeline.py --source your_video.mp4 --dry-run --annotate --annotate-path 
 
 `--source 0` 接摄像头，`--source path/to/frames/` 接图片序列目录；`--dry-run` 只跑检测/跟踪/事件/KG，跳过 LLM。
 
+**单位**：没有相机标定时，产物里的 `velocity_ms` 实际是**像素/秒**、`distance_m` 实际是**像素**（字段名沿用早期设想，未改名，避免破坏 Web/Agent 的字段契约）。dry-run 日志按 `vel=…px/s`、`dist=…px` 打印，`EventBuilder` 的近邻阈值 100 也是像素；接上相机标定后才有物理单位。
+
 **这段示例视频跑出来的实际数字**（`--event-interval` 默认 30 帧；2026-11-27 在 CUDA 上按下面的命令重跑，复现了同一组数）：8 秒切出 **6 个事件**；事件里出现过的 `track_id` 共 **7 个（2/3/5/7/8/9/11）**，`raw_tracks=12`，最终收敛成 **4 个 Entity**；每个事件内 1–3 个 tracklet、最多 1 条 `near` 空间关系；结束时 KG 有 **10 个节点（6 Event + 4 Entity）/ 19 条边**；`tracker metrics: drop_rate=0.0838 gap_rate=0.0479 id_switches=8 entities=4`。
 
 > **两个比率的口径**（容易对不上）：`0.0838 / 0.0479` 是**全片 200 帧**的累计口径，就是运行时最后打印的那一行。
@@ -139,6 +152,16 @@ python pipeline.py --source your_video.mp4 --with-anomaly \
 **Web 演示**：前端在 `web/frontend/`（原生 HTML/JS，无构建链），后端在 `web/backend/`。
 先取消 `requirements.txt` 里 Web 段的注释并安装，然后 `python -m uvicorn web.backend.main:app --port 8000`，
 打开 `http://127.0.0.1:8000`。
+
+Web 端和 CLI 的默认值**不一样**，看代码前先知道这几条（都是为交互流畅做的取舍，不影响 CLI）：
+
+| 项 | Web | CLI |
+|---|---|---|
+| 检测权重 | 硬编码 `yolov8l.pt`（87 MB，不在仓库里，首次运行由 Ultralytics 下载或手动放到根目录），`imgsz=960`、`conf=0.15`、只跑 `classes=[0]`（person） | `yolov8n-pose.pt`、`imgsz=640`、`conf=0.5`，可用 `--classes 0,2` 加类别 |
+| 事件窗口 | `event_interval_frames=60` | `--event-interval` 默认 30 |
+| GMC | `with_gmc=False`（省掉每帧光流，优先出帧速度） | 默认开启 |
+
+`/chat` 问答接口在 `web/backend/main.py`，实现是 `scripts/qa_repl.py::KGQA`：先按「N号在干什么 / A号和B号什么关系 / 场景里有多少人 / 谁在跑动 / N号附近有谁」的模板查 KG，匹配不上才用 `DEEPSEEK_API_KEY` 兜底；没有 key 时只走规则模板。实体编号两种前缀都认（`Person-3` 与旧的 `Entity-3`）。前端「待确认合并」按钮会往 `/chat` 发一条 `__merge__`，合并只在前端本地状态完成，后端不落库。
 
 ## 指标怎么用（MOT）
 
@@ -252,7 +275,7 @@ python -m evaluation.make_demo_sequence --report
 python -m pytest -q
 ```
 
-实测 **108 passed**（Python 3.13 + pytest，本机完整依赖）。`tests/` 共 12 个文件，覆盖 tracker 配置、Entity 合并判定、事件序列化、KG 连续性写入、gate 指标、标准 MOT 指标适配器（满分自检 + 合成序列的判别力比对）与 Web 前端契约。`TestDemoSequence` 用 `evaluation/demo_data/` 的三组预测守住 IDF1 / IDSW / FN 的方向，改坏 `mot_metrics.py` 的匹配或计数会直接红。
+实测 **131 passed**（Python 3.13 + pytest，本机完整依赖）。`tests/` 共 16 个文件，覆盖 tracker 配置与检测类别透传、姿态关键点按 `track_id` 对齐、Entity 合并判定、事件序列化、KG 连续性写入、gate 指标、标准 MOT 指标适配器（满分自检 + 合成序列的判别力比对）、`/chat` 背后的问答规则，以及 Web 前端契约。`TestDemoSequence` 用 `evaluation/demo_data/` 的三组预测守住 IDF1 / IDSW / FN 的方向，改坏 `mot_metrics.py` 的匹配或计数会直接红。
 
 ## 技术栈
 

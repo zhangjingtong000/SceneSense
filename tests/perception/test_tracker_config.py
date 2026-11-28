@@ -85,7 +85,7 @@ def test_reid_extractor_uses_half_precision_on_cuda(monkeypatch):
 def test_tracker_output_empty_when_no_confirmed_tracks():
     tracker = MultiObjectTracker(with_reid=False, with_gmc=False)
 
-    assert tracker._build_output(0.0, [], [], 0) == []
+    assert tracker._build_output(0.0) == []
 
 
 def test_track_confirms_on_third_consecutive_observation():
@@ -108,7 +108,7 @@ def test_confirmed_track_output_includes_continuity_signals_and_existing_keys():
     track.time_since_update = 2
     tracker.tracked_tracks.append(track)
 
-    output = tracker._build_output(0.5, ["person"], [], 10)
+    output = tracker._build_output(0.5)
 
     assert len(output) == 1
     result = output[0]

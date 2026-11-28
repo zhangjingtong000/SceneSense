@@ -435,7 +435,8 @@ class AnomalyAgent(BaseAgent):
         """将实体数据转为文本描述（用于 evidence 和 LLM 调用）。"""
         parts = [
             f"class={entity_data.get('class', 'N/A')}",
-            f"velocity={entity_data.get('velocity_ms', 0):.2f}m/s",
+            # 无相机标定，速度是像素/秒
+            f"velocity={entity_data.get('velocity_ms', 0):.2f}px/s",
         ]
         motion = entity_data.get("motion")
         if motion:

@@ -568,7 +568,8 @@ async def run_pipeline(video_path: str, video_id: str, websocket, api_key: str =
                     await websocket.send_json({"type": "agent_status", "agent": "trajectory_agent", "status": "active"})
                     try:
                         event = event_builder.build_event(active, event_start, frame_idx, fps)
-                        output = orch.process_event(event)
+                        # Agent 链路是同步 HTTP 调用，放线程里跑，别阻塞事件循环
+                        output = await asyncio.to_thread(orch.process_event, event)
                         write_continuity_event(
                             graphstore,
                             event,

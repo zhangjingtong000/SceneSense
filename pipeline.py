@@ -20,6 +20,7 @@ import numpy as np
 from perception.detector import YOLODetector, PoseEstimator
 from perception.entity_profile import EntityProfileManager
 from perception.metrics import TrackerMetrics
+from perception.pose_align import apply_pose_keypoints, build_pose_map, prune_pose_map
 from perception.tracker import MultiObjectTracker
 from perception.event_builder import EventBuilder
 from agents.llm_client import LLMClient
@@ -144,7 +145,9 @@ class Pipeline:
         self.with_anomaly = with_anomaly
         self.with_rules = with_rules
         self._writer = None  # cv2.VideoWriter, 延迟初始化
-        self._last_keypoints: list[list[list[float]]] = []
+        # 姿态每 5 帧算一次，中间帧按 track_id 复用（不能用列表下标：
+        # tracked 的顺序会因 lost / 新增轨迹变化，下标回填会画到别人身上）。
+        self._keypoints_by_track_id: dict = {}
 
         # 1. KG 层
         self.graphstore = GraphStore(use_directed=True)
@@ -293,13 +296,13 @@ class Pipeline:
             tracked = self.entity_profiles.update(tracked, self.frame_idx, timestamp) if tracked else []
             self.tracker_metrics.observe(detections, tracked, self.entity_profiles.to_entities())
             if tracked:
-                # 姿态估计：每5帧做一次，中间帧复用
+                # 姿态估计：每5帧做一次，中间帧按 track_id 复用
                 if self.frame_idx % 5 == 0:
                     bboxes = [t["bbox"] for t in tracked]
-                    self._last_keypoints = self.pose_estimator.estimate(frame, bboxes)
-                for i, kps in enumerate(self._last_keypoints):
-                    if i < len(tracked):
-                        tracked[i]["pose_keypoints"] = kps
+                    keypoints_list = self.pose_estimator.estimate(frame, bboxes)
+                    self._keypoints_by_track_id = build_pose_map(tracked, keypoints_list)
+                self._keypoints_by_track_id = prune_pose_map(self._keypoints_by_track_id, tracked)
+                apply_pose_keypoints(tracked, self._keypoints_by_track_id)
                 tracker_results.extend(strip_tracker_debug_fields(tracked))
 
             # 标注 + 写入视频
@@ -358,11 +361,11 @@ class Pipeline:
                   f"zone={event['zone_id']}")
             for t in event["tracklets"]:
                 print(f"    track_id={t['track_id']} class={t['class']} "
-                      f"vel={t['velocity_ms']:.1f}m/s dir={t['direction_deg']:.0f}° "
+                      f"vel={t['velocity_ms']:.1f}px/s dir={t['direction_deg']:.0f}° "
                       f"trajectory_len={len(t['trajectory'])}")
             for r in event["spatial_relations"]:
                 print(f"    relation: {r['track_1']}↔{r['track_2']} "
-                      f"dist={r['distance_m']:.1f}m type={r['relation_type']}")
+                      f"dist={r['distance_m']:.1f}px type={r['relation_type']}")
             self._results.append({
                 "event_id": event["event_id"],
                 "duration": event["duration"],
