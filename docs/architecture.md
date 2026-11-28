@@ -462,15 +462,17 @@ class KGAPI:
 
 ### 5.4 协调 Agent
 
-## 6. 实现阶段 TODO
+## 6. 实现阶段清单
 
-以下三项已在协议文档中预留定义，具体实现逻辑在编码阶段处理：
+以下是协议文档里预留、后来逐个落地的情况。**三项里两项已实现**；第三项（多轮协商的终止条件）没有实现，因为最终架构不是多轮协商，而是单轮星型编排——见本节末尾说明。
 
 | # | 位置 | 内容 | 状态 |
 |---|------|------|------|
-| 3 | KG API | `evict_before(timestamp)` — 清理过期 Event 节点，防止 NetworkX 内存图无限增长。Event 节点构建时写入 `expires_at` | 📋 TODO |
-| 4 | 场景总结 Agent | 输出 `raw_score`（原始子图匹配分），协调 Agent 做加权融合 → `fused_severity`。权重可配置 | 📋 TODO |
-| 5 | 协调 Agent | 终止条件实现：CONSENSUS(confidence≥0.7且raw≤0.3或≥0.7) / STALEMATE(同entity 2轮未共识→uncertain) / MAX_ROUNDS(单事件≤3轮) | 📋 TODO |
+| 3 | KG API | `evict_before(timestamp)` — 清理过期 Event 节点，防止 NetworkX 内存图无限增长。Event 节点构建时写入 `expires_at` | ✅ 已实现（`kg/graph_store.py:184`，`pipeline.py:416` 每个事件后调用） |
+| 4 | 异常检测 Agent | 输出 `raw_score`（原始子图匹配分），最终 `fused_severity` 由总结层加权融合 | ✅ 已实现（`agents/anomaly_agent.py`，`raw_score` 与 `confidence` 一并输出） |
+| 5 | 协调 Agent | 多轮协商的终止条件：CONSENSUS / STALEMATE / MAX_ROUNDS | ⛔ 未实现，且**架构已改为单轮星型编排** —— `Orchestrator.process_event` 按注册顺序让每个 Agent 各跑一次，收集结果后交总结层，没有「轮次」概念。多轮协商需要 Agent 之间互相看结果并重新提问，那是另一套架构；当前设计选择单轮，代价是复杂冲突不会二次求证 |
+
+> 第 5 项不是「忘了做」，是设计变了：单轮星型编排在事件级吞吐上更稳（每个事件固定 N 次 Agent 调用，可预测），代价是遇到互相矛盾的判断时不会追问。如果要支持多轮，需要在 `Orchestrator` 里加轮次控制与终止判定，并让 Agent 的 `think()` 能接收其它 Agent 的结论。
 
 ```
 你是多Agent系统的协调者。基于当前场景和各Agent的输入，做出路由决策和最终融合判断。
