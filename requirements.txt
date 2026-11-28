@@ -28,4 +28,6 @@ openai>=1.0               # DeepSeek（OpenAI 兼容接口）
 #                         #  避免和本机 numba/paddlex 之类的 numpy<2.5 约束打架
 
 # ---- 开发 / 测试 ----
+# 跑完整测试只装本文件不够：tests/web/ 要 httpx，tests/evaluation/ 要下面注释掉的
+# motmetrics / trackeval。用 `pip install -r requirements-dev.txt` 一次装齐。
 pytest>=7.4

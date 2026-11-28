@@ -1,0 +1,27 @@
+# SceneSense 开发 / 测试依赖
+#
+# 陌生人在全新 clone 里跑 README「测试」章节只需要这一条：
+#     pip install -r requirements-dev.txt
+#
+# 它包含运行依赖（-r requirements.txt）加上测试真正需要、但运行时可选的包。
+# requirements.txt 里这些包是注释掉的可选后端，只装它会导致：
+#   * tests/web/            → 收集期 ModuleNotFoundError: fastapi / httpx
+#   * tests/evaluation/     → IDF1 / MOTA / HOTA 为 None，断言失败
+
+-r requirements.txt
+
+# ---- Web 工作台（tests/web/ 用 fastapi.testclient，间接依赖 httpx）----
+fastapi>=0.110
+uvicorn[standard]>=0.27
+python-multipart>=0.0.9
+httpx>=0.27
+
+# ---- 标准 MOT 指标后端（tests/evaluation/test_mot_metrics.py 断言必须有值）----
+motmetrics>=1.4
+# trackeval 的元数据把 numpy 写成无上限，常规安装可能把 numpy 升到 2.x 以上。
+# 本机已有 numpy<2.5 约束时改用：pip install --no-deps trackeval
+trackeval>=1.3
+
+# ---- 测试与静态检查 ----
+pytest>=7.4
+ruff>=0.5

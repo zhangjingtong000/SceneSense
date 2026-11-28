@@ -97,7 +97,7 @@ kg/                GraphStore、连续性写入、规则引擎
 models/            ReID 权重放这里（可选，不入库）
 perception/        检测、跟踪、实体画像、事件构建
 scripts/           Gate 入口、MOT 序列导出、KG 可视化
-tests/             160 个测试
+tests/             162 个测试
 web/               FastAPI 后端 + 原生 HTML/JS 前端
 pipeline.py        端到端入口
 ```
@@ -105,10 +105,13 @@ pipeline.py        端到端入口
 ## 测试
 
 ```bash
-python -m pytest -q        # 160 passed
+pip install -r requirements-dev.txt   # 运行依赖 + 测试依赖（httpx / motmetrics / trackeval / pytest / ruff）
+python -m pytest -q        # 162 passed
 python -m ruff check --select F,E9 .
 ```
 
+`requirements.txt` 只装运行所需；`requirements-dev.txt` 已通过 `-r requirements.txt` 带上前者，
+并补上 `tests/web/` 需要的 `httpx` 与 `tests/evaluation/` 断言必须有的 `motmetrics` / `trackeval`。
 CI 在 Python 3.10 / 3.12 上跑同样的检查，见 `.github/workflows/ci.yml`。MOT 指标回归：
 
 ```bash
