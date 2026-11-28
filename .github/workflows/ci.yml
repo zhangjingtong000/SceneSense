@@ -58,5 +58,11 @@ jobs:
       - name: 装 web 依赖
         run: python -m pip install fastapi uvicorn python-multipart httpx
 
+      # requirements.txt 里 motmetrics / trackeval 同样是注释掉的可选后端，但
+      # tests/evaluation/test_mot_metrics.py 断言 IDF1 / MOTA / HOTA 有值（None 即失败），
+      # 这两个后端必须装。trackeval 自身依赖 pycocotools / matplotlib 等，按常规定安装。
+      - name: 装 MOT 指标后端
+        run: python -m pip install motmetrics trackeval
+
       - name: 测试
         run: python -m pytest -q
