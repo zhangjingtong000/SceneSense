@@ -30,7 +30,7 @@ class LLMClient:
         self.max_tokens = max_tokens
 
     def generate(self, prompt: str, **kwargs: Any) -> str:
-        """单字符串快捷调用。kg_builder 使用此接口。
+        """单字符串快捷调用（不带 system prompt 的场景用这一条）。
 
         Args:
             prompt: 完整 prompt 文本
